@@ -52,20 +52,41 @@ echo
 echo "### 4/4  Primera ronda de chequeos"
 # El CronJob corre una vez por minuto. Para no arrancar con el tablero vacio se
 # dispara una ronda a mano.
-kubectl -n "$NS" run primera-ronda --rm -i --restart=Never --quiet \
-    --image=python:3.12-slim --command -- python -c "
+#
+# No se usa "kubectl run --rm -i": esa forma espera en stdin cuando no hay
+# terminal interactiva y el script se cuelga. Se lanza el Pod, se espera a que
+# termine y se lo borra.
+kubectl -n "$NS" delete pod primera-ronda --now >/dev/null 2>&1 || true
+kubectl -n "$NS" run primera-ronda \
+    --restart=Never \
+    --image=python:3.12-slim \
+    --image-pull-policy=IfNotPresent \
+    --command -- python -c "
 import urllib.request
 p = urllib.request.Request('http://statuspage/api/check-now', method='POST')
 with urllib.request.urlopen(p, timeout=45) as r:
     print(r.read().decode())
-" 2>/dev/null || echo "(la primera ronda fallo, el CronJob la va a repetir en menos de un minuto)"
+" >/dev/null 2>&1 || true
+
+for _ in $(seq 1 40); do
+    fase="$(kubectl -n "$NS" get pod primera-ronda -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+    if [ "$fase" = "Succeeded" ] || [ "$fase" = "Failed" ]; then break; fi
+    sleep 2
+done
+kubectl -n "$NS" logs primera-ronda 2>/dev/null || echo "(la primera ronda no salio; el CronJob la repite en menos de un minuto)"
+kubectl -n "$NS" delete pod primera-ronda --now >/dev/null 2>&1 || true
 echo
 
 echo "=========================================="
 kubectl -n "$NS" get deploy,svc,cronjob
 echo
 echo "Trafico actual: $(kubectl -n "$NS" get svc statuspage -o jsonpath='{.spec.selector.version}')"
-echo "Tablero:        $(minikube service statuspage -n "$NS" --url 2>/dev/null || echo "http://$(minikube ip):30090")"
 echo
+echo "Para abrir el tablero en el navegador:"
+echo "    minikube service statuspage -n $NS"
+echo
+# Con el driver docker en macOS, la IP del nodo (192.168.49.2) NO es alcanzable
+# desde el host: hace falta el tunel que abre "minikube service", y ese comando
+# tiene que quedar corriendo en su propia terminal.
 echo "Siguiente paso: ./scripts/demo-blue-green.sh"
 echo "=========================================="

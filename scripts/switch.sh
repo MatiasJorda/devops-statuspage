@@ -67,6 +67,6 @@ kubectl -n "$NS" patch svc "$SVC" \
 nuevo="$(kubectl -n "$NS" get svc "$SVC" -o jsonpath='{.spec.selector.version}')"
 echo
 echo "Listo. El trafico ahora va a: $nuevo"
-echo "Tablero: $(minikube service statuspage -n "$NS" --url 2>/dev/null || echo 'http://<ip-minikube>:30090')"
 echo
-echo "Si algo sale mal: ./scripts/rollback.sh"
+echo "Para ver el tablero:  minikube service statuspage -n $NS"
+echo "Si algo sale mal:     ./scripts/rollback.sh"
