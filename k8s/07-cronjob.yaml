@@ -1,0 +1,71 @@
+# El CronJob que dispara los chequeos, una vez por minuto.
+#
+# LA DECISION DE DISEÑO MAS IMPORTANTE DE ESTE ARCHIVO
+# El CronJob NO trae su propia copia del codigo de chequeo: solo le pega al
+# endpoint /api/check-now del Service publico. Quien realmente chequea es la
+# version que en ese momento tiene el trafico.
+#
+# Por que importa: si el CronJob tuviera el codigo adentro, habria que versionarlo
+# y patchearlo en cada switch blue/green, y quedaria la duda de que version esta
+# corriendo los chequeos cuando el Service apunta a la otra. Asi, despues del
+# switch a green, la ronda siguiente ya guarda latencia sin haber tocado el
+# CronJob: en el tablero se ve el momento exacto en que cambio el comportamiento.
+#
+# UN MINUTO ES EL MINIMO QUE PERMITE CRON
+# Para la demostracion en vivo esperar un minuto es una eternidad, por eso el
+# tablero tiene ademas un boton "Chequear ahora" que llama al mismo endpoint.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: chequeos
+  namespace: statuspage
+spec:
+  schedule: "* * * * *"
+
+  # Forbid: si una ronda todavia no termino cuando arranca la siguiente, se saltea
+  # en vez de solaparse. Sin esto, un servicio lento podria acumular rondas
+  # pisandose entre si.
+  concurrencyPolicy: Forbid
+
+  # Si el cluster estuvo apagado (o suspendido, como pasa con minikube en una
+  # notebook), no tiene sentido disparar de golpe todas las rondas atrasadas: si
+  # una ejecucion no pudo arrancar dentro de estos 30 segundos, se descarta.
+  startingDeadlineSeconds: 30
+
+  # Cuantos Jobs terminados se guardan. Sin este limite se acumulan cientos de
+  # objetos Job y Pod completados que ensucian el "kubectl get all".
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+  jobTemplate:
+    spec:
+      # Si la ronda falla, se reintenta una vez y despues se da por perdida: el
+      # proximo minuto hay una ronda nueva igual, no vale la pena insistir.
+      backoffLimit: 1
+      activeDeadlineSeconds: 60
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: disparador
+              # python:3.12-slim ya esta en el daemon de minikube porque es la base
+              # de las imagenes del proyecto: no hay que descargar nada nuevo y el
+              # cluster sigue funcionando sin internet. Se usa urllib de la
+              # biblioteca estandar para no necesitar curl.
+              image: python:3.12-slim
+              imagePullPolicy: IfNotPresent
+              command: ["python", "-c"]
+              args:
+                - |
+                  import urllib.request
+                  pedido = urllib.request.Request(
+                      "http://statuspage/api/check-now", method="POST")
+                  with urllib.request.urlopen(pedido, timeout=45) as respuesta:
+                      print(respuesta.status, respuesta.read().decode())
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 100m
+                  memory: 64Mi

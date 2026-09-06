@@ -1,0 +1,116 @@
+# Postgres: el estado del proyecto vive aca, fuera de los Pods de la aplicacion.
+#
+# POR QUE ESTO ES LA PIEZA QUE HACE POSIBLE EL BLUE/GREEN
+# En blue/green se cambia de un conjunto de Pods a otro completamente distinto. Si
+# los datos estuvieran adentro del contenedor de la aplicacion, al mover el
+# selector del Service se perderia todo el historial de chequeos. Con la base
+# afuera, blue y green miran los mismos datos y el switch no pierde nada.
+#
+# Es tambien lo que obliga a que el cambio de esquema de la v2 sea compatible
+# hacia atras: las dos versiones leen y escriben ESTA misma base.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-datos
+  namespace: statuspage
+spec:
+  accessModes:
+    # ReadWriteOnce = lo monta un solo nodo a la vez. Alcanza porque Postgres
+    # corre en un unico Pod (y minikube tiene un solo nodo). Una base de datos NO
+    # se escala poniendo mas replicas sobre el mismo volumen: dos procesos de
+    # Postgres escribiendo el mismo directorio lo corrompen.
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: statuspage
+  labels:
+    app: postgres
+spec:
+  replicas: 1
+  strategy:
+    # Recreate y no RollingUpdate: con RollingUpdate, Kubernetes levantaria el Pod
+    # nuevo ANTES de bajar el viejo, y por un momento habria dos Postgres
+    # apuntando al mismo volumen. Recreate apaga el viejo primero. Implica unos
+    # segundos de corte de la base en cada cambio, que es el precio correcto aca.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_USER
+              value: status
+            - name: POSTGRES_DB
+              value: statuspage
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credenciales
+                  key: POSTGRES_PASSWORD
+            # La imagen de Postgres inicializa la base en el directorio que le
+            # marque PGDATA. Se apunta a un subdirectorio del volumen (y no a su
+            # raiz) porque algunos volumenes traen un lost+found que hace fallar
+            # el initdb con "directory not empty".
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+              name: postgres
+          volumeMounts:
+            - name: datos
+              mountPath: /var/lib/postgresql/data
+          # pg_isready pregunta si la base acepta conexiones. Es mejor que un
+          # chequeo de puerto TCP: el puerto abre antes de que Postgres termine de
+          # recuperarse, y ahi todavia rechaza consultas.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "status", "-d", "statuspage"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "status", "-d", "statuspage"]
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: datos
+          persistentVolumeClaim:
+            claimName: postgres-datos
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: statuspage
+  labels:
+    app: postgres
+spec:
+  # ClusterIP: solo se llega desde adentro del cluster. La base no tiene por que
+  # ser accesible desde afuera, y no exponerla es la configuracion mas segura.
+  type: ClusterIP
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: postgres

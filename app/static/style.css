@@ -1,0 +1,198 @@
+/* Tablero del status page. Sin frameworks a proposito: no hay build step, la
+   imagen no necesita node y el contenido se sirve tal cual desde FastAPI. */
+
+:root {
+  --fondo: #0f1115;
+  --superficie: #181b22;
+  --borde: #262b36;
+  --texto: #e6e9ef;
+  --texto-tenue: #8b93a5;
+  --ok: #35c46a;
+  --caido: #e5484d;
+  --sin-datos: #3a4150;
+  --azul: #2f6feb;
+  --verde: #1f8f4e;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--texto);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
+/* --- Cabecera: su color es el del despliegue activo -------------------------
+   Es el cambio visible del blue/green. La v1 corre con APP_COLOR=blue y la v2
+   con APP_COLOR=green, asi que al mover el selector del Service la franja de
+   arriba cambia de color en el navegador de quien este mirando. */
+header {
+  padding: 1.25rem 1.5rem;
+  background: var(--azul);
+  transition: background 0.3s;
+}
+header.green { background: var(--verde); }
+
+.contenido-cabecera {
+  max-width: 1000px;
+  margin: 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+h1 { font-size: 1.25rem; margin: 0; font-weight: 600; }
+
+.version {
+  font-size: 0.8rem;
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+
+main { max-width: 1000px; margin: 0 auto; padding: 1.5rem; }
+
+.barra-acciones {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.boton-primario {
+  background: var(--azul);
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 0.5rem 0.9rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+.boton-primario:hover { filter: brightness(1.1); }
+.boton-primario:disabled { opacity: 0.5; cursor: default; }
+
+.tenue { color: var(--texto-tenue); font-size: 0.8rem; }
+.aviso { color: var(--ok); font-size: 0.8rem; }
+.error { color: var(--caido); font-size: 0.8rem; }
+
+/* --- Tarjetas de servicio --- */
+.grilla { display: grid; gap: 0.75rem; }
+
+.tarjeta {
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.encabezado-tarjeta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.punto {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--sin-datos);
+}
+.punto.ok { background: var(--ok); }
+.punto.caido { background: var(--caido); }
+
+.nombre { font-weight: 600; font-size: 0.95rem; }
+
+.destino {
+  color: var(--texto-tenue);
+  font-size: 0.78rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.origen {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--texto-tenue);
+  border: 1px solid var(--borde);
+  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+}
+
+.btn-borrar {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--borde);
+  color: var(--texto-tenue);
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.btn-borrar:hover { color: var(--caido); border-color: var(--caido); }
+
+/* --- Barra de historial: una barrita por chequeo, la mas nueva a la derecha --- */
+.historial {
+  display: flex;
+  gap: 2px;
+  height: 28px;
+  align-items: stretch;
+  margin-bottom: 0.75rem;
+}
+
+.barrita {
+  flex: 1;
+  min-width: 2px;
+  border-radius: 2px;
+  background: var(--sin-datos);
+}
+.barrita.ok { background: var(--ok); }
+.barrita.caido { background: var(--caido); }
+
+.metricas {
+  display: flex;
+  gap: 1.5rem;
+  font-size: 0.8rem;
+  color: var(--texto-tenue);
+  flex-wrap: wrap;
+}
+.metricas b { color: var(--texto); font-variant-numeric: tabular-nums; }
+
+.motivo-caida {
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--caido);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* --- Formulario de alta --- */
+.alta { margin-top: 2rem; }
+.alta h2 { font-size: 0.95rem; font-weight: 600; margin-bottom: 0.75rem; }
+
+.fila { display: flex; gap: 0.75rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+.fila label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; color: var(--texto-tenue); }
+.fila label.ancho { flex: 1; }
+
+input, select {
+  background: var(--superficie);
+  border: 1px solid var(--borde);
+  color: var(--texto);
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.875rem;
+  font-family: inherit;
+}
+input:focus, select:focus { outline: 1px solid var(--azul); }
+
+.oculto { display: none; }
+
+.vacio {
+  color: var(--texto-tenue);
+  font-size: 0.875rem;
+  padding: 2rem;
+  text-align: center;
+  border: 1px dashed var(--borde);
+  border-radius: 8px;
+}

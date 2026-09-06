@@ -1,0 +1,51 @@
+# Configuracion de la aplicacion.
+#
+# LA LISTA DE SERVICIOS MONITOREADOS VIVE ACA, NO EN LA IMAGEN
+# Es la diferencia entre configuracion y codigo: cambiar que se monitorea no
+# deberia obligar a reconstruir y volver a desplegar la imagen. Se edita este
+# ConfigMap, se reinician los Pods y listo.
+#
+# Los targets se precargan en la base al arrancar (marcados como source
+# 'configmap'). Los que se agregan despues desde el tablero quedan marcados como
+# 'ui' y este archivo no los pisa: son dos origenes que conviven.
+#
+# Las direcciones son nombres de Service resueltos por el DNS interno del cluster
+# (CoreDNS): dentro del namespace alcanza con el nombre corto, "nginx-demo" resuelve
+# a la IP del Service nginx-demo. No hace falta internet para nada de esto.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: statuspage-config
+  namespace: statuspage
+data:
+  DEFAULT_TIMEOUT: "3"
+
+  targets.json: |
+    [
+      {
+        "name": "statuspage-blue",
+        "kind": "http",
+        "url": "http://statuspage-blue-interno:8080/health"
+      },
+      {
+        "name": "statuspage-green",
+        "kind": "http",
+        "url": "http://statuspage-green:8080/health"
+      },
+      {
+        "name": "nginx-demo",
+        "kind": "http",
+        "url": "http://nginx-demo:80/"
+      },
+      {
+        "name": "servicio-caotico",
+        "kind": "http",
+        "url": "http://servicio-caotico:8080/"
+      },
+      {
+        "name": "postgres",
+        "kind": "tcp",
+        "host": "postgres",
+        "port": 5432
+      }
+    ]

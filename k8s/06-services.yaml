@@ -1,0 +1,81 @@
+# Los tres Services del blue/green.
+#
+#   statuspage                -> el publico. Su selector decide QUIEN atiende.
+#   statuspage-green          -> apunta siempre a green. Sirve para probar la
+#                                version nueva antes de darle un solo usuario.
+#   statuspage-blue-interno   -> apunta siempre a blue. Permite que el propio
+#                                tablero monitoree los dos colores a la vez.
+#
+# EL SWITCH, QUE ES TODO EL DEPLOY:
+#   kubectl -n statuspage patch svc statuspage \
+#     -p '{"spec":{"selector":{"app":"statuspage","version":"green"}}}'
+#
+# EL ROLLBACK, que es el mismo patch al reves y es instantaneo porque blue nunca
+# se apago:
+#   kubectl -n statuspage patch svc statuspage \
+#     -p '{"spec":{"selector":{"app":"statuspage","version":"blue"}}}'
+---
+# El Service publico. Hoy su selector incluye version: blue, asi que solo llega
+# trafico a los Pods blue aunque los green esten levantados y sanos.
+apiVersion: v1
+kind: Service
+metadata:
+  name: statuspage
+  namespace: statuspage
+  labels:
+    app: statuspage
+spec:
+  type: NodePort
+  selector:
+    app: statuspage
+    version: blue
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      # Las actividades 1 a 3 ya usan 30080, 30081, 30082 y 30083. Los NodePort son
+      # de todo el cluster (el namespace no los aisla), asi que el proyecto arranca
+      # en 30090 para no pisarlas.
+      nodePort: 30090
+---
+# Service de PRUEBA, apuntado siempre a green. Es lo que hace posible el smoke
+# test previo al switch: se le pega a la version nueva con trafico real sin que
+# ningun usuario la vea.
+apiVersion: v1
+kind: Service
+metadata:
+  name: statuspage-green
+  namespace: statuspage
+  labels:
+    app: statuspage
+    version: green
+spec:
+  type: ClusterIP
+  selector:
+    app: statuspage
+    version: green
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# Service fijo a blue. No es parte del mecanismo de despliegue: existe para que el
+# tablero pueda monitorear a blue y a green por separado, sin importar cual de los
+# dos tiene el trafico en este momento.
+apiVersion: v1
+kind: Service
+metadata:
+  name: statuspage-blue-interno
+  namespace: statuspage
+  labels:
+    app: statuspage
+    version: blue
+spec:
+  type: ClusterIP
+  selector:
+    app: statuspage
+    version: blue
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

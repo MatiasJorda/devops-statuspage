@@ -1,0 +1,99 @@
+# GREEN: la version nueva (statuspage:2.0).
+#
+# Ya esta corriendo, ya paso sus probes y ya escribe en la misma base... pero NO
+# recibe trafico de usuarios hasta que alguien mueva el selector del Service
+# publico. Mientras tanto se la puede probar por su propio Service
+# (statuspage-green, en 06-services.yaml): eso es lo que permite hacer el smoke
+# test ANTES del switch, y es la ventaja principal del blue/green sobre el rolling
+# update, donde un Pod nuevo empieza a recibir usuarios apenas queda Ready.
+#
+# Es deliberadamente identico a 04-deployment-blue.yaml salvo por el nombre, la
+# etiqueta version y la imagen. Ver ese archivo para los comentarios de cada campo.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: statuspage-green
+  namespace: statuspage
+  labels:
+    app: statuspage
+    version: green
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: statuspage
+      version: green
+  template:
+    metadata:
+      labels:
+        app: statuspage
+        version: green
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: statuspage
+          # La 2.0 agrega la columna latency_ms a la tabla checks con una migracion
+          # ADITIVA: la 1.0 sigue pudiendo insertar sin esa columna, que es lo que
+          # hace que el rollback a blue siga siendo posible despues del switch.
+          image: statuspage:2.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credenciales
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: postgresql://status:$(POSTGRES_PASSWORD)@postgres:5432/statuspage
+            - name: TARGETS_FILE
+              value: /etc/statuspage/targets.json
+            - name: DEFAULT_TIMEOUT
+              valueFrom:
+                configMapKeyRef:
+                  name: statuspage-config
+                  key: DEFAULT_TIMEOUT
+            - name: INSTANCE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/statuspage
+              readOnly: true
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: statuspage-config
+            items:
+              - key: targets.json
+                path: targets.json

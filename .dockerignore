@@ -1,0 +1,21 @@
+# Todo lo que no tiene por que entrar en la imagen: la achica y acelera el build.
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.git/
+.gitignore
+.DS_Store
+k8s/
+scripts/
+tests/
+flaky/
+docker-compose.yml
+*.md
+
+# OJO: app-v1/ NO se ignora a proposito. La imagen statuspage:1.0 se construye
+# con --build-arg APP_DIR=app-v1, asi que ese directorio tiene que estar en el
+# contexto de build; si estuviera aca, el COPY de la v1 fallaria con
+# "file not found". Igual no engorda la imagen de la v2: el contexto se envia al
+# daemon, pero solo termina adentro lo que se copia explicitamente con COPY.

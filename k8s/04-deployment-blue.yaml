@@ -1,0 +1,122 @@
+# BLUE: la version que hoy atiende a los usuarios (statuspage:1.0).
+#
+# Blue y green son dos Deployments COMPLETOS y simultaneos. Los dos estan
+# corriendo y sanos todo el tiempo; lo unico que decide quien recibe trafico es el
+# selector del Service publico (ver 06-services.yaml).
+#
+# Este archivo y el de green son casi identicos a proposito: la unica diferencia
+# es la etiqueta version y la imagen. Esa simetria es lo que hace que el switch
+# sea seguro, porque el entorno nuevo no es "el viejo modificado" sino uno
+# equivalente levantado al lado.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: statuspage-blue
+  namespace: statuspage
+  labels:
+    app: statuspage
+    version: blue
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: statuspage
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: statuspage
+        # ESTA ETIQUETA ES TODO EL MECANISMO DEL BLUE/GREEN.
+        # El Service no conoce Pods: conoce etiquetas. Cambiar el selector del
+        # Service de version: blue a version: green mueve el trafico entero de un
+        # conjunto de Pods al otro, y tarda milisegundos.
+        version: blue
+    spec:
+      securityContext:
+        # Coincide con el UID del appuser que crea el Dockerfile.
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: statuspage
+          image: statuspage:1.0
+          # Las imagenes se construyen dentro del daemon de minikube y no existen
+          # en ningun registry publico: sin esto, Kubernetes intentaria bajarlas de
+          # Docker Hub y fallaria con ImagePullBackOff.
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credenciales
+                  key: POSTGRES_PASSWORD
+            # Kubernetes interpola $(VAR) con variables declaradas ANTES en esta
+            # misma lista. Asi la contraseña sale del Secret y la URL se arma sola,
+            # sin repetir el secreto en el ConfigMap ni hardcodearlo aca.
+            - name: DATABASE_URL
+              value: postgresql://status:$(POSTGRES_PASSWORD)@postgres:5432/statuspage
+            - name: TARGETS_FILE
+              value: /etc/statuspage/targets.json
+            - name: DEFAULT_TIMEOUT
+              valueFrom:
+                configMapKeyRef:
+                  name: statuspage-config
+                  key: DEFAULT_TIMEOUT
+            # Downward API: todas las replicas salen del mismo template, asi que lo
+            # unico que las distingue es lo que Kubernetes sabe de cada Pod.
+            - name: INSTANCE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/statuspage
+              readOnly: true
+          lifecycle:
+            preStop:
+              exec:
+                # Al terminar un Pod pasan dos cosas en paralelo: le llega SIGTERM
+                # y su endpoint se saca del Service. La segunda tarda en propagarse
+                # a las reglas de red del nodo, asi que por unos milisegundos
+                # siguen llegando requests a un proceso que ya se cerro (errores
+                # causados por el propio deploy). Estos 5 segundos alcanzan para
+                # que la desuscripcion se propague antes de que el proceso muera.
+                command: ["sleep", "5"]
+          # readiness: "¿puedo atender?". Mira la base. Si Postgres todavia no
+          # levanto, este Pod queda fuera del Service en vez de recibir usuarios
+          # que veran un error.
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          # liveness: "¿sigo vivo?". NO mira la base a proposito: si la base se cae,
+          # reiniciar la aplicacion no arregla nada y solo agregaria un
+          # CrashLoopBackOff arriba del problema real.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: statuspage-config
+            items:
+              # Del ConfigMap solo se monta la clave targets.json. Las demas claves
+              # llegan como variables de entorno, no como archivos.
+              - key: targets.json
+                path: targets.json

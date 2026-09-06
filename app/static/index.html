@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Status Page</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- La clase del header la pone app.js segun el color del despliegue activo
+       (blue o green). Es el cambio que se ve al hacer el switch blue/green. -->
+  <header id="cabecera">
+    <div class="contenido-cabecera">
+      <h1>Status Page</h1>
+      <span id="etiqueta-version" class="version">cargando...</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="barra-acciones">
+      <button id="btn-chequear" class="boton-primario">Chequear ahora</button>
+      <span id="aviso" class="aviso"></span>
+      <span id="ultimo-refresco" class="tenue"></span>
+    </section>
+
+    <section id="servicios" class="grilla"></section>
+
+    <section class="alta">
+      <h2>Agregar un servicio</h2>
+      <form id="form-alta">
+        <div class="fila">
+          <label>Nombre <input name="name" required placeholder="mi-servicio"></label>
+          <label>Tipo
+            <select name="kind" id="select-tipo">
+              <option value="http">HTTP</option>
+              <option value="tcp">TCP</option>
+            </select>
+          </label>
+        </div>
+        <div class="fila" id="campos-http">
+          <label class="ancho">URL <input name="url" placeholder="http://nginx-demo/"></label>
+        </div>
+        <div class="fila oculto" id="campos-tcp">
+          <label>Host <input name="host" placeholder="postgres"></label>
+          <label>Puerto <input name="port" type="number" placeholder="5432"></label>
+        </div>
+        <button type="submit" class="boton-primario">Agregar</button>
+        <span id="error-alta" class="error"></span>
+      </form>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# Namespace propio para todo el proyecto.
+#
+# Dos motivos: (1) las actividades 1 a 3 ya viven en el namespace default y no se
+# tienen que mezclar con esto, (2) borrar el proyecto entero es "kubectl delete
+# namespace statuspage", sin ir objeto por objeto.
+#
+# Ojo: el namespace aisla los NOMBRES, no los puertos del nodo. Los NodePort son
+# de todo el cluster, por eso este proyecto usa el 30090 y no repite los
+# 30080-30083 que ya ocupan las actividades anteriores.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: statuspage
+  labels:
+    proyecto: statuspage

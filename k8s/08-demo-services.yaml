@@ -1,0 +1,104 @@
+# Los servicios que el tablero monitorea, mas alla de la propia aplicacion.
+#
+#   nginx-demo        siempre sano: es la linea de base del tablero.
+#   servicio-caotico  falla el 20% de las veces a proposito.
+#
+# El servicio caotico no es relleno. Sin el, todos los semaforos estarian siempre
+# en verde, el historial seria una franja lisa y todos los porcentajes dirian
+# 100%: no habria forma de mostrar que el tablero realmente distingue un servicio
+# sano de uno caido, ni de ver como se dibuja una caida en el historial.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-demo
+  namespace: statuspage
+  labels:
+    app: nginx-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-demo
+  template:
+    metadata:
+      labels:
+        app: nginx-demo
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+              name: http
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-demo
+  namespace: statuspage
+spec:
+  selector:
+    app: nginx-demo
+  ports:
+    - port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: servicio-caotico
+  namespace: statuspage
+  labels:
+    app: servicio-caotico
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: servicio-caotico
+  template:
+    metadata:
+      labels:
+        app: servicio-caotico
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: caotico
+          image: servicio-caotico:1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            # Que porcentaje de las respuestas falla. Se puede subir en vivo para
+            # que el tablero se ponga rojo durante la demostracion.
+            - name: TASA_FALLA
+              value: "0.2"
+          ports:
+            - containerPort: 8080
+              name: http
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: servicio-caotico
+  namespace: statuspage
+spec:
+  selector:
+    app: servicio-caotico
+  ports:
+    - port: 8080
+      targetPort: http

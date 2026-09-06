@@ -1,0 +1,67 @@
+# Entorno de desarrollo local: la aplicacion completa SIN Kubernetes.
+#
+# Sirve para dos cosas: programar sin tener que reconstruir imagenes y volver a
+# desplegar en minikube en cada cambio, y darle a quien corrija el trabajo una
+# forma de ver la aplicacion andando sin instalar un cluster.
+#
+#   docker compose up --build
+#   -> tablero en http://localhost:8080
+#
+# Los servicios que se monitorean (nginx, el servicio caotico y la propia base)
+# se resuelven por el nombre del servicio de compose, igual que en Kubernetes se
+# resuelven por el nombre del Service.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      # Se expone al host para poder correr la aplicacion con Python directamente
+      # (sin contenedor) durante el desarrollo, apuntando a esta misma base.
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: status
+      POSTGRES_PASSWORD: status
+      POSTGRES_DB: statuspage
+    volumes:
+      - datos-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U status -d statuspage"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      args:
+        # Por defecto se construye la v2. Para levantar la v1:
+        #   APP_DIR=app-v1 APP_VERSION=1.0 APP_COLOR=blue docker compose up --build
+        APP_DIR: ${APP_DIR:-app}
+        APP_VERSION: ${APP_VERSION:-2.0}
+        APP_COLOR: ${APP_COLOR:-green}
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgresql://status:status@postgres:5432/statuspage
+      TARGETS_FILE: /etc/statuspage/targets.json
+    volumes:
+      # Equivalente local del ConfigMap: se monta el DIRECTORIO, no el archivo
+      # suelto. Es como funciona un ConfigMap de verdad (Kubernetes monta un
+      # directorio con una entrada por clave) y ademas evita los problemas que da
+      # en Docker Desktop para Mac montar un unico archivo.
+      - ./dev:/etc/statuspage:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # --- Servicios monitoreados --------------------------------------------------
+  nginx:
+    image: nginx:alpine
+
+  flaky:
+    build: ./flaky
+    environment:
+      TASA_FALLA: "0.2"
+
+volumes:
+  datos-postgres:
