@@ -18,6 +18,29 @@ metadata:
     version: blue
 spec:
   replicas: 2
+
+  # Cuantas revisiones viejas se guardan por color. Cada una es un ReplicaSet con
+  # 0 replicas (no consume CPU ni memoria, solo una entrada en etcd), pero sin
+  # limite se acumulan y ensucian el "kubectl get all". Con 3 alcanza para hacer
+  # "rollout undo" un par de veces.
+  revisionHistoryLimit: 3
+
+  # Un Pod nuevo tiene que estar Ready 5 segundos seguidos antes de contar como
+  # disponible. Si la version nueva arranca y se muere a los 2 segundos, el
+  # rollout se frena en lugar de seguir reemplazando replicas sanas por rotas.
+  minReadySeconds: 5
+
+  # OJO: esta estrategia NO es la del blue/green. El blue/green pasa de una
+  # version a la otra moviendo el selector del Service (ver 06-services.yaml).
+  # Esto es para cuando se actualiza un color POR DENTRO: por ejemplo un
+  # "kubectl rollout restart" o un cambio de imagen sobre green. Ahi Kubernetes
+  # reemplaza los Pods de ese color de a uno, y con maxUnavailable: 0 la
+  # capacidad nunca baja de 2.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: statuspage

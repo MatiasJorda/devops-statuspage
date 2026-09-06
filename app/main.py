@@ -11,6 +11,7 @@ Endpoints:
   GET    /api/status           estado + uptime de todos los servicios
   GET    /api/targets          lista de servicios monitoreados
   POST   /api/targets          agrega un servicio
+  PATCH  /api/targets/{id}     pausa o reanuda el monitoreo
   DELETE /api/targets/{id}     saca un servicio
   GET    /api/history/{id}     ultimos chequeos de un servicio
   POST   /api/check-now        dispara una ronda de chequeos ya mismo
@@ -76,6 +77,12 @@ app = FastAPI(title="Status Page", version=config.APP_VERSION, lifespan=lifespan
 app.mount("/static", StaticFiles(directory=ESTATICOS), name="static")
 
 
+class CambioEstado(BaseModel):
+    """Cuerpo del PATCH que pausa o reanuda un servicio."""
+
+    enabled: bool
+
+
 class NuevoTarget(BaseModel):
     """Datos para dar de alta un servicio desde la interfaz."""
 
@@ -122,9 +129,29 @@ def crear_target(nuevo: NuevoTarget):
 
     try:
         return db.create_target(nuevo.model_dump())
+    except db.NombreRepetido as exc:
+        # 409 Conflict: es culpa del pedido, el usuario puede corregirlo cambiando
+        # el nombre.
+        raise HTTPException(409, f"ya existe un servicio llamado '{nuevo.name}'") from exc
     except Exception as exc:  # noqa: BLE001
-        # El caso tipico es el nombre repetido (hay un UNIQUE en la tabla).
-        raise HTTPException(409, f"no se pudo crear: {exc}") from exc
+        # 503: es culpa del servidor, el pedido estaba bien. El detalle va al log
+        # y NO a la respuesta: el mensaje crudo de Postgres puede revelar nombres
+        # de tablas, usuarios o direcciones internas.
+        log.exception("error de base al crear el servicio")
+        raise HTTPException(503, "no se pudo guardar: la base no responde") from exc
+
+
+@app.patch("/api/targets/{target_id}")
+def pausar_o_reanudar(target_id: int, cambio: CambioEstado):
+    """Pausa o reanuda el monitoreo de un servicio.
+
+    Un servicio pausado conserva su historial pero deja de chequearse. Es lo que
+    se usa en un mantenimiento programado, para no ensuciar el porcentaje de
+    disponibilidad con caidas que uno mismo provoco.
+    """
+    if not db.set_enabled(target_id, cambio.enabled):
+        raise HTTPException(404, "no existe ese servicio")
+    return {"id": target_id, "enabled": cambio.enabled}
 
 
 @app.delete("/api/targets/{target_id}", status_code=204)

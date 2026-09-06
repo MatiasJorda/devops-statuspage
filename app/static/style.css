@@ -121,8 +121,25 @@ main { max-width: 1000px; margin: 0 auto; padding: 1.5rem; }
   padding: 0.1rem 0.35rem;
 }
 
-.btn-borrar {
+/* Un servicio pausado se ve apagado pero sigue en la lista: la idea es que se
+   note que esta ahi y que no se esta chequeando, no esconderlo. */
+.tarjeta.pausada { opacity: 0.55; }
+.tarjeta.pausada .punto { background: var(--sin-datos); }
+
+.btn-pausa {
   margin-left: auto;
+  background: none;
+  border: 1px solid var(--borde);
+  color: var(--texto-tenue);
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  margin-right: 0.4rem;
+}
+.btn-pausa:hover { color: var(--texto); border-color: var(--texto-tenue); }
+
+.btn-borrar {
   background: none;
   border: 1px solid var(--borde);
   color: var(--texto-tenue);

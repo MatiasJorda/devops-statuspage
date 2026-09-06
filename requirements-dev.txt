@@ -1,0 +1,9 @@
+# Dependencias para correr los tests. NO entran en la imagen: el .dockerignore
+# excluye tests/ y el Dockerfile solo instala app/requirements.txt.
+#
+#     pip install -r requirements-dev.txt
+#     pytest tests/
+
+-r app/requirements.txt
+
+pytest==9.1.1

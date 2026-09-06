@@ -15,7 +15,7 @@ qué código y cuánto tardó. Con eso el tablero muestra:
 - Porcentaje de disponibilidad en tres ventanas: 1 hora, 24 horas, 7 días
 - Barra de historial con los últimos 40 chequeos
 - Latencia promedio (solo en la v2)
-- Alta y baja de servicios desde la interfaz
+- Alta, baja, pausa y reanudación de servicios desde la interfaz
 
 Los servicios monitoreados son los que corren en el propio cluster. Eso hace que
 el tablero sirva como instrumento de medición del proyecto: durante el switch
@@ -157,11 +157,79 @@ adelante con una versión rota. Es el patrón expand/contract.
 | Probar antes de exponer | No se puede | Sí, por el Service de preview |
 | Velocidad del cambio | Minutos, Pod por Pod | Milisegundos, un patch |
 | Rollback | Recrear los Pods viejos | Otro patch, instantáneo |
-| Recursos | N + maxSurge | 2N mientras dure |
+| Recursos | N + maxSurge, solo durante el rollout | 2N de forma permanente |
 
 La ventaja concreta acá es el smoke test: `scripts/smoke-test.sh` prueba green por
 su Service privado y solo si pasa se mueve el tráfico. En un rolling update un Pod
 nuevo empieza a recibir usuarios apenas queda Ready.
+
+### Reaplicar los manifiestos vuelve el tráfico a blue
+
+Si después de un switch corrés `deploy.sh` otra vez, o un `kubectl apply -f k8s/`,
+**el tráfico vuelve a blue**. No es un error: `06-services.yaml` declara
+`selector: version=blue`, y `apply` hace que el cluster coincida con lo que dice
+el archivo.
+
+Es la tensión entre las dos formas de operar un cluster. El repositorio declara
+cuál es el estado deseado, y el switch es un cambio imperativo hecho por fuera de
+ese repositorio: el `patch` de `switch.sh` no queda escrito en ningún lado, así
+que el siguiente `apply` lo pisa.
+
+En un proyecto real se resuelve de dos maneras. O el color activo se versiona en
+el repositorio y el switch es un commit (que es la idea de GitOps), o el Service
+lo maneja una herramienta de despliegue progresivo (Argo Rollouts, Flagger) que
+sabe que ese campo no le pertenece al manifiesto.
+
+Para la entrega alcanza con saberlo: **después de un `apply`, revisá quién tiene
+el tráfico** antes de dar la demostración.
+
+```bash
+kubectl -n statuspage get svc statuspage -o jsonpath='{.spec.selector.version}'
+```
+
+## Variables de entorno
+
+Las lee `app/config.py`. En Kubernetes llegan desde el ConfigMap, el Secret y el
+Dockerfile; en desarrollo, desde `docker-compose.yml`.
+
+| Variable | De dónde sale | Para qué |
+|---|---|---|
+| `APP_VERSION` | Dockerfile (`ARG APP_VERSION`) | Qué versión dice ser. Es propiedad de la imagen, no del entorno |
+| `APP_COLOR` | Dockerfile (`ARG APP_COLOR`) | Color de la cabecera: `blue` o `green` |
+| `DATABASE_URL` | Deployment, armada con el Secret | Conexión a Postgres |
+| `TARGETS_FILE` | Deployment | Ruta al `targets.json` montado desde el ConfigMap |
+| `DEFAULT_TIMEOUT` | ConfigMap | Segundos de espera por chequeo |
+
+`APP_VERSION` y `APP_COLOR` van en la imagen y no en el ConfigMap a propósito:
+blue y green comparten el mismo ConfigMap, así que si el color viniera de ahí las
+dos versiones se pintarían igual y el switch no se vería.
+
+## Bajar todo
+
+```bash
+kubectl delete namespace statuspage
+```
+
+Borra los Deployments, los Services, el CronJob, el ConfigMap, el Secret y el
+volumen de la base. Las imágenes quedan en el daemon de minikube.
+
+Para apagar el cluster entero:
+
+```bash
+minikube stop
+```
+
+## Límites conocidos
+
+- **La tabla `checks` crece sin límite.** Con cinco servicios y un chequeo por
+  minuto son unas 7000 filas por día. No molesta en la escala del trabajo, pero en
+  un uso real haría falta borrar lo viejo (un CronJob de limpieza) o pasar a una
+  base pensada para series temporales.
+- **La contraseña de Postgres está en el repositorio**, dentro del Secret. Es a
+  propósito, para que el proyecto se levante con un solo comando, y es una
+  contraseña de juguete que no protege nada. En un proyecto real se usa Sealed
+  Secrets, External Secrets o Vault.
+- **El switch no queda registrado en el repositorio** (ver arriba).
 
 ## Objetos de Kubernetes
 
@@ -223,23 +291,45 @@ APP_DIR=app-v1 APP_VERSION=1.0 APP_COLOR=blue docker compose up --build
 ## Tests
 
 ```bash
-pip install pytest httpx && pytest tests/
+pip install -r requirements-dev.txt
+pytest tests/
 ```
 
-10 tests de la lógica de chequeo. No necesitan base ni cluster: levantan
-servidores HTTP reales en puertos libres.
+34 tests en tres archivos:
+
+| Archivo | Qué prueba | Necesita |
+|---|---|---|
+| `test_checker.py` | La lógica de chequeo HTTP y TCP | Nada. Levanta servidores reales en puertos libres |
+| `test_api.py` | Los códigos HTTP de la API | Nada. Reemplaza la base por funciones falsas |
+| `test_db_integracion.py` | El SQL del cálculo de disponibilidad | Postgres |
+
+Los de integración **se saltean solos** si no hay base a mano, así que
+`pytest tests/` funciona en cualquier máquina. Para correrlos también:
+
+```bash
+kubectl -n statuspage port-forward svc/postgres 5432:5432 &
+DATABASE_URL=postgresql://status:statuspage-demo@localhost:5432/statuspage pytest tests/
+```
+
+Cada test de integración crea su propio servicio con un nombre único y lo borra
+al terminar, así que no ensucia los datos que ya estaban.
+
+Por qué el SQL se prueba contra una base de verdad: el cálculo de disponibilidad
+vive entero en una consulta, y una consulta contra objetos falsos no prueba nada.
 
 ## Estructura
 
 ```
-app/                  código de la v2
-app-v1/               código de la v1, congelado
-flaky/                servicio que falla el 20% de las veces
-Dockerfile            un solo Dockerfile para las dos versiones (ARG APP_DIR)
-docker-compose.yml    desarrollo local sin Kubernetes
-k8s/                  manifiestos
-scripts/              build, deploy, switch, rollback y demo
-tests/                tests del checker
+app/                    código de la v2
+app-v1/                 código de la v1, congelado
+flaky/                  servicio que falla el 20% de las veces
+dev/targets.json        servicios a monitorear en desarrollo local
+Dockerfile              un solo Dockerfile para las dos versiones (ARG APP_DIR)
+docker-compose.yml      desarrollo local sin Kubernetes
+requirements-dev.txt    dependencias de los tests
+k8s/                    manifiestos
+scripts/                build, deploy, switch, rollback y demo
+tests/                  chequeo, API e integración con la base
 ```
 
 ## Demostración en vivo

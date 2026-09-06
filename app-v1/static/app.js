@@ -68,6 +68,12 @@ async function cargarEstado() {
     btn.onclick = () => borrarServicio(id, servicio ? servicio.name : "este servicio");
   });
 
+  document.querySelectorAll(".btn-pausa").forEach((btn) => {
+    const id = Number(btn.dataset.id);
+    const activo = btn.dataset.enabled === "true";
+    btn.onclick = () => cambiarEstado(id, !activo);
+  });
+
   $("#ultimo-refresco").textContent =
     "actualizado " + new Date().toLocaleTimeString("es-AR");
 }
@@ -89,12 +95,13 @@ function tarjeta(s, historial) {
       .join("");
 
   return `
-    <article class="tarjeta">
+    <article class="tarjeta ${s.enabled ? "" : "pausada"}">
       <div class="encabezado-tarjeta">
         <span class="punto ${estado}"></span>
         <span class="nombre">${escapar(s.name)}</span>
         <span class="destino">${escapar(destino || "")}</span>
         <span class="origen">${s.source === "configmap" ? "configmap" : "manual"}</span>
+        <button class="btn-pausa" data-id="${s.id}" data-enabled="${s.enabled}">${s.enabled ? "pausar" : "reanudar"}</button>
         <button class="btn-borrar" data-id="${s.id}">quitar</button>
       </div>
       <div class="historial">${barritas}</div>
@@ -145,6 +152,18 @@ async function chequearAhora() {
 async function borrarServicio(id, nombre) {
   if (!confirm(`¿Dejar de monitorear "${nombre}"?`)) return;
   await fetch(`/api/targets/${id}`, { method: "DELETE" });
+  cargarEstado();
+}
+
+// Pausar no borra nada: el servicio conserva su historial pero deja de
+// chequearse. Es lo que se usa en un mantenimiento programado, para no ensuciar
+// el porcentaje de disponibilidad con caidas que uno mismo provoco.
+async function cambiarEstado(id, activar) {
+  await fetch(`/api/targets/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: activar }),
+  });
   cargarEstado();
 }
 

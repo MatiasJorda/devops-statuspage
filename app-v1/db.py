@@ -13,6 +13,17 @@ from . import config
 _pool: ConnectionPool | None = None
 
 
+class NombreRepetido(Exception):
+    """Ya existe un servicio con ese nombre (hay un UNIQUE en la tabla).
+
+    Existe para que la capa de la API pueda distinguir este caso, que es un error
+    del usuario y merece un 409, de una falla de la base, que es un problema del
+    servidor y merece un 503. Sin esto habria que atrapar cualquier excepcion y
+    contestar siempre lo mismo, que es enganoso y ademas filtra al cliente los
+    mensajes internos de Postgres.
+    """
+
+
 def init_pool() -> None:
     """Crea el pool. Se llama una sola vez al arrancar la app."""
     global _pool
@@ -131,18 +142,36 @@ def list_targets(only_enabled: bool = False) -> list[dict]:
 
 
 def create_target(data: dict) -> dict:
+    try:
+        with cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO targets (name, kind, url, host, port, timeout_s,
+                                     expected_status, source)
+                VALUES (%(name)s, %(kind)s, %(url)s, %(host)s, %(port)s,
+                        %(timeout_s)s, %(expected_status)s, 'ui')
+                RETURNING *
+                """,
+                data,
+            )
+            return cur.fetchone()
+    except psycopg.errors.UniqueViolation as exc:
+        raise NombreRepetido(data["name"]) from exc
+
+
+def set_enabled(target_id: int, enabled: bool) -> bool:
+    """Pausa o reanuda el monitoreo de un servicio.
+
+    Un servicio pausado sigue en la lista con su historial intacto, pero
+    chequear_ahora() lo saltea porque consulta con only_enabled=True. Sirve para
+    un mantenimiento programado: se pausa, no ensucia el porcentaje de
+    disponibilidad con caidas esperadas, y despues se reanuda.
+    """
     with cursor() as cur:
         cur.execute(
-            """
-            INSERT INTO targets (name, kind, url, host, port, timeout_s,
-                                 expected_status, source)
-            VALUES (%(name)s, %(kind)s, %(url)s, %(host)s, %(port)s,
-                    %(timeout_s)s, %(expected_status)s, 'ui')
-            RETURNING *
-            """,
-            data,
+            "UPDATE targets SET enabled = %s WHERE id = %s", (enabled, target_id)
         )
-        return cur.fetchone()
+        return cur.rowcount > 0
 
 
 def delete_target(target_id: int) -> bool:
