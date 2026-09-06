@@ -26,8 +26,8 @@ blue/green se ve en vivo que el servicio no se cae.
 ```
                        ┌──────────────────────────────┐
    navegador ────────► │  Service statuspage          │
-   (NodePort 30090)    │  selector: version=blue      │ ◄── el switch cambia
-                       └───────────┬──────────────────┘     esta etiqueta
+   (ver "Abrir el      │  selector: version=blue      │ ◄── el switch cambia
+    tablero")          └───────────┬──────────────────┘     esta etiqueta
                                    │
                 ┌──────────────────┴──────────────────┐
                 ▼                                     ▼
@@ -67,10 +67,40 @@ las imágenes se construyen dentro del daemon de minikube.
 ```
 
 Construye las dos imágenes, aplica los manifiestos en orden, espera a que todo
-esté listo, dispara la primera ronda de chequeos e imprime la URL del tablero.
+esté listo y dispara la primera ronda de chequeos para que el tablero no arranque
+vacío.
 
 Al terminar: el tráfico está en **blue** (v1) y **green** (v2) ya está corriendo
 en paralelo, sana y sin recibir usuarios.
+
+## Abrir el tablero
+
+```bash
+minikube service statuspage -n statuspage
+```
+
+Ese comando abre el navegador y **hay que dejarlo corriendo en su terminal**: es
+el túnel. Si lo cortás, el tablero deja de responder.
+
+Puede parecer raro teniendo un NodePort, así que vale la explicación: con el
+driver Docker en macOS y en Windows, la IP del nodo de minikube (algo como
+`192.168.49.2`) vive dentro de la red de Docker y **no es alcanzable desde la
+máquina**. Entrar directo a `http://192.168.49.2:30090` no funciona, aunque el
+Service esté perfecto. `minikube service` levanta un túnel a un puerto local
+(`127.0.0.1:PUERTO_AL_AZAR`) y por ahí sí se llega.
+
+En Linux con el driver Docker, o con los drivers de máquina virtual, la IP del
+nodo sí es alcanzable y se puede entrar directo:
+
+```bash
+echo "http://$(minikube ip):30090"
+```
+
+Para ver solo la URL del túnel, sin abrir el navegador:
+
+```bash
+minikube service statuspage -n statuspage --url
+```
 
 ## Probar el blue/green
 
@@ -78,9 +108,16 @@ en paralelo, sana y sin recibir usuarios.
 ./scripts/demo-blue-green.sh
 ```
 
-Deja un loop pegándole al Service público cada 200 ms, hace el switch, y al
-final imprime cuántas respuestas dio cada versión y **cuántos requests fallaron**.
-Ese número tiene que ser 0.
+Levanta un Pod monitor **dentro del cluster** que le pega al Service público cada
+200 ms, hace el switch, y al final imprime cuántas respuestas dio cada versión y
+**cuántos requests fallaron**. Ese número tiene que ser 0.
+
+El monitor corre adentro y no en la máquina por un motivo concreto: un túnel desde
+afuera (`minikube service`, `kubectl port-forward`) resuelve el Service una sola
+vez, al abrirse, y después manda todos los requests al mismo Pod. Si el switch
+cambia el selector, el túnel seguiría hablando con el Pod viejo y la demostración
+mostraría que no pasó nada. Desde adentro, cada request pasa por kube-proxy y se
+resuelve contra el selector **actual**.
 
 Para volver atrás:
 

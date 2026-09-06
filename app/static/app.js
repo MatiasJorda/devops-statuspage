@@ -8,6 +8,10 @@ const BARRITAS = 40;        // cuantos chequeos se dibujan en la barra de histor
 
 const $ = (sel) => document.querySelector(sel);
 
+// Ultimo estado recibido del servidor. Lo usan los botones para saber a que
+// servicio corresponden sin tener que guardar datos del usuario en el DOM.
+let serviciosActuales = [];
+
 // --- Version y color del despliegue -----------------------------------------
 // Es lo que hace visible el blue/green: la v1 corre con APP_COLOR=blue y la v2
 // con APP_COLOR=green, asi que al mover el selector del Service la cabecera
@@ -49,12 +53,19 @@ async function cargarEstado() {
     )
   );
 
+  serviciosActuales = servicios;
+
   $("#servicios").innerHTML = servicios
     .map((s, i) => tarjeta(s, historiales[i]))
     .join("");
 
+  // El nombre NO viaja en un atributo del boton: se busca por id en los datos que
+  // ya estan en memoria. Asi ningun texto escrito por el usuario termina adentro
+  // de un atributo HTML, que es donde el escapado es mas facil de equivocar.
   document.querySelectorAll(".btn-borrar").forEach((btn) => {
-    btn.onclick = () => borrarServicio(btn.dataset.id, btn.dataset.nombre);
+    const id = Number(btn.dataset.id);
+    const servicio = serviciosActuales.find((s) => s.id === id);
+    btn.onclick = () => borrarServicio(id, servicio ? servicio.name : "este servicio");
   });
 
   $("#ultimo-refresco").textContent =
@@ -84,7 +95,7 @@ function tarjeta(s, historial) {
         <span class="nombre">${escapar(s.name)}</span>
         <span class="destino">${escapar(destino || "")}</span>
         <span class="origen">${s.source === "configmap" ? "configmap" : "manual"}</span>
-        <button class="btn-borrar" data-id="${s.id}" data-nombre="${escapar(s.name)}">quitar</button>
+        <button class="btn-borrar" data-id="${s.id}">quitar</button>
       </div>
       <div class="historial">${barritas}</div>
       <div class="metricas">
@@ -108,10 +119,15 @@ const ms = (v) => (v === null || v === undefined ? "s/d" : `${Math.round(Number(
 
 // Los nombres y las URLs los escribe el usuario: se escapan antes de meterlos en
 // el HTML para no abrir un XSS en el propio tablero.
+//
+// OJO CON textContent SOLO: escapa &, < y >, pero NO las comillas. Eso alcanza
+// cuando el valor va como texto entre etiquetas, pero NO cuando va adentro de un
+// atributo: un nombre como  x" onmouseover="alert(1)  cerraria el atributo e
+// inyectaria un manejador de eventos. Por eso se escapan tambien las comillas.
 function escapar(texto) {
   const div = document.createElement("div");
-  div.textContent = texto;
-  return div.innerHTML;
+  div.textContent = texto ?? "";
+  return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 // --- Acciones ----------------------------------------------------------------
