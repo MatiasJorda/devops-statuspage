@@ -5,12 +5,11 @@ FastAPI: recibe un diccionario que describe un servicio y devuelve otro con el
 resultado. Asi se puede testear sin base de datos y sin levantar el servidor
 (ver tests/test_checker.py).
 
-VERSION 2: ademas de si respondio y con que codigo, se mide CUANTO TARDO.
-Ese es el unico cambio de comportamiento respecto de la v1.
+VERSION 1: se registra si el servicio respondio y con que codigo HTTP.
+La v2 agrega la medicion de latencia.
 """
 
 import socket
-import time
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
@@ -21,11 +20,7 @@ MAX_PARALELO = 10
 
 
 def chequear(target: dict) -> dict:
-    """Chequea un servicio. Devuelve {'ok', 'status_code', 'error', 'latency_ms'}.
-
-    latency_ms es el agregado de la v2. Vale None cuando no hubo respuesta que
-    cronometrar (timeout, conexion rechazada): en esos casos el tiempo medido
-    seria el del timeout, no el del servicio, y guardarlo ensuciaria el promedio.
+    """Chequea un servicio. Devuelve {'ok', 'status_code', 'error'}.
 
     Nunca lanza excepciones: un servicio caido es un resultado valido del
     chequeo, no un error del programa. Si esta funcion tirara una excepcion,
@@ -41,29 +36,20 @@ def _chequear_http(target: dict) -> dict:
     timeout = target.get("timeout_s") or 3
     esperado = target.get("expected_status") or 200
 
-    # perf_counter y no time(): es monotono, asi que un ajuste del reloj del
-    # sistema en medio de la medicion no puede dar una latencia negativa.
-    inicio = time.perf_counter()
-
     try:
         # follow_redirects: un 301 hacia una pagina sana no es una caida.
         respuesta = httpx.get(url, timeout=timeout, follow_redirects=True)
     except httpx.TimeoutException:
-        return {"ok": False, "status_code": None, "error": f"timeout ({timeout}s)",
-                "latency_ms": None}
+        return {"ok": False, "status_code": None, "error": f"timeout ({timeout}s)"}
     except httpx.RequestError as exc:
         # Cubre DNS que no resuelve, conexion rechazada, TLS invalido, etc.
-        return {"ok": False, "status_code": None, "error": type(exc).__name__,
-                "latency_ms": None}
-
-    latencia = (time.perf_counter() - inicio) * 1000
+        return {"ok": False, "status_code": None, "error": type(exc).__name__}
 
     ok = respuesta.status_code == esperado
     return {
         "ok": ok,
         "status_code": respuesta.status_code,
         "error": None if ok else f"se esperaba {esperado}",
-        "latency_ms": round(latencia, 1),
     }
 
 
@@ -76,19 +62,13 @@ def _chequear_tcp(target: dict) -> dict:
     port = target["port"]
     timeout = target.get("timeout_s") or 3
 
-    inicio = time.perf_counter()
-
     try:
         with socket.create_connection((host, port), timeout=timeout):
-            latencia = (time.perf_counter() - inicio) * 1000
-            return {"ok": True, "status_code": None, "error": None,
-                    "latency_ms": round(latencia, 1)}
+            return {"ok": True, "status_code": None, "error": None}
     except socket.timeout:
-        return {"ok": False, "status_code": None, "error": f"timeout ({timeout}s)",
-                "latency_ms": None}
+        return {"ok": False, "status_code": None, "error": f"timeout ({timeout}s)"}
     except OSError as exc:
-        return {"ok": False, "status_code": None, "error": exc.strerror or str(exc),
-                "latency_ms": None}
+        return {"ok": False, "status_code": None, "error": exc.strerror or str(exc)}
 
 
 def chequear_todos(targets: list[dict]) -> list[tuple[dict, dict]]:

@@ -1,7 +1,7 @@
 // Tablero del status page. JavaScript sin frameworks: se sirve tal cual, no hay
 // paso de build y la imagen Docker no necesita node.
 //
-// VERSION 2: ademas del estado y la disponibilidad, muestra la latencia.
+// VERSION 1: muestra estado y disponibilidad. La v2 agrega la latencia.
 
 const REFRESCO_MS = 5000;   // cada cuanto se vuelve a pedir el estado
 const BARRITAS = 40;        // cuantos chequeos se dibujan en la barra de historial
@@ -92,7 +92,6 @@ function tarjeta(s, historial) {
         <span>24h <b>${pct(s.uptime_24h)}</b></span>
         <span>7d <b>${pct(s.uptime_7d)}</b></span>
         ${s.last_status ? `<span>ultimo codigo <b>${s.last_status}</b></span>` : ""}
-        <span class="latencia">latencia <b>${ms(s.latencia_media_1h)}</b></span>
       </div>
       ${s.last_ok === false && s.last_error
         ? `<div class="motivo-caida">${escapar(s.last_error)}</div>` : ""}
@@ -100,11 +99,6 @@ function tarjeta(s, historial) {
 }
 
 const pct = (v) => (v === null || v === undefined ? "s/d" : `${Number(v).toFixed(1)}%`);
-
-// Agregado de la v2. Las mediciones que dejo la v1 vienen en null, asi que un
-// servicio recien migrado muestra "s/d" hasta que corre la primera ronda con la
-// version nueva. Eso es justamente lo que se ve pasar durante la demostracion.
-const ms = (v) => (v === null || v === undefined ? "s/d" : `${Math.round(Number(v))} ms`);
 
 // Los nombres y las URLs los escribe el usuario: se escapan antes de meterlos en
 // el HTML para no abrir un XSS en el propio tablero.

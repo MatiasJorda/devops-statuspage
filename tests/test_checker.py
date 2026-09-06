@@ -121,3 +121,21 @@ def test_chequear_todos_respeta_el_orden(servidor):
 
 def test_chequear_todos_sin_servicios():
     assert checker.chequear_todos([]) == []
+
+
+# --- Latencia (agregado de la v2) --------------------------------------------
+
+def test_mide_latencia_cuando_el_servicio_responde(servidor):
+    resultado = checker.chequear({"kind": "http", "url": servidor(200)})
+    assert resultado["latency_ms"] is not None
+    assert resultado["latency_ms"] >= 0
+
+
+def test_no_inventa_latencia_cuando_no_hubo_respuesta():
+    """Sin respuesta no hay nada que cronometrar: guardar el tiempo del timeout
+    ensuciaria el promedio con un numero que no es del servicio."""
+    resultado = checker.chequear(
+        {"kind": "http", "url": f"http://127.0.0.1:{_puerto_libre()}/", "timeout_s": 1}
+    )
+    assert resultado["ok"] is False
+    assert resultado["latency_ms"] is None

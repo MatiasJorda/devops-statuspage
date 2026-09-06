@@ -1,0 +1,216 @@
+# Status Page
+
+Tablero que monitorea servicios y muestra si están arriba o caídos, con historial
+de disponibilidad y tiempos de respuesta.
+
+Proyecto de la materia DevOps: aplicación contenerizada, desplegada en Kubernetes,
+con dos versiones que se alternan usando la estrategia **blue/green**.
+
+## Qué hace
+
+Cada minuto le pega a una lista de servicios y anota tres cosas: si respondió, con
+qué código y cuánto tardó. Con eso el tablero muestra:
+
+- Semáforo por servicio (verde arriba, rojo caído)
+- Porcentaje de disponibilidad en tres ventanas: 1 hora, 24 horas, 7 días
+- Barra de historial con los últimos 40 chequeos
+- Latencia promedio (solo en la v2)
+- Alta y baja de servicios desde la interfaz
+
+Los servicios monitoreados son los que corren en el propio cluster. Eso hace que
+el tablero sirva como instrumento de medición del proyecto: durante el switch
+blue/green se ve en vivo que el servicio no se cae.
+
+## Arquitectura
+
+```
+                       ┌──────────────────────────────┐
+   navegador ────────► │  Service statuspage          │
+   (NodePort 30090)    │  selector: version=blue      │ ◄── el switch cambia
+                       └───────────┬──────────────────┘     esta etiqueta
+                                   │
+                ┌──────────────────┴──────────────────┐
+                ▼                                     ▼
+       ┌─────────────────┐                   ┌─────────────────┐
+       │ statuspage-blue │                   │ statuspage-green│
+       │ imagen 1.0      │                   │ imagen 2.0      │
+       │ 2 réplicas      │                   │ 2 réplicas      │
+       └────────┬────────┘                   └────────┬────────┘
+                │                                     │
+                └──────────────┬──────────────────────┘
+                               ▼
+                     ┌───────────────────┐
+                     │ Postgres + PVC    │  el estado vive acá,
+                     │ Service ClusterIP │  fuera de los Pods
+                     └───────────────────┘
+
+       CronJob (cada minuto) ──► POST /api/check-now al Service público
+                                 (lo ejecuta la versión que tiene el tráfico)
+
+       Servicios monitoreados: nginx-demo, servicio-caotico, postgres,
+                               statuspage-blue, statuspage-green
+```
+
+## Requisitos
+
+- Docker
+- minikube corriendo (`minikube start`)
+- kubectl
+
+No hace falta cuenta en ningún registry ni conexión a internet durante la demo:
+las imágenes se construyen dentro del daemon de minikube.
+
+## Levantar todo
+
+```bash
+./scripts/deploy.sh
+```
+
+Construye las dos imágenes, aplica los manifiestos en orden, espera a que todo
+esté listo, dispara la primera ronda de chequeos e imprime la URL del tablero.
+
+Al terminar: el tráfico está en **blue** (v1) y **green** (v2) ya está corriendo
+en paralelo, sana y sin recibir usuarios.
+
+## Probar el blue/green
+
+```bash
+./scripts/demo-blue-green.sh
+```
+
+Deja un loop pegándole al Service público cada 200 ms, hace el switch, y al
+final imprime cuántas respuestas dio cada versión y **cuántos requests fallaron**.
+Ese número tiene que ser 0.
+
+Para volver atrás:
+
+```bash
+./scripts/rollback.sh
+```
+
+## Las dos versiones
+
+| | v1 (blue) | v2 (green) |
+|---|---|---|
+| Imagen | `statuspage:1.0` | `statuspage:2.0` |
+| Color de la cabecera | azul | verde |
+| Guarda latencia | no | sí |
+| Muestra latencia | no | sí |
+
+El cambio es mínimo y visible, pero no es cosmético: la v2 necesita una columna
+nueva en la base que blue y green comparten.
+
+### Por qué la migración es aditiva
+
+`ALTER TABLE checks ADD COLUMN IF NOT EXISTS latency_ms REAL`
+
+La columna admite NULL. Los INSERT de la v1, que ni la mencionan, siguen siendo
+válidos. Si después del switch hay que volver a blue, blue sigue escribiendo sin
+problemas sobre filas que la v2 dejó con latencia.
+
+Si el cambio hubiera sido destructivo (renombrar una columna, cambiarle el tipo,
+agregarla como NOT NULL), el rollback sería imposible: quedarías obligado a seguir
+adelante con una versión rota. Es el patrón expand/contract.
+
+## Blue/green y rolling update
+
+|  | Rolling update | Blue/green |
+|---|---|---|
+| Conviven las versiones | Sí, durante todo el rollout | No, el corte es atómico |
+| Probar antes de exponer | No se puede | Sí, por el Service de preview |
+| Velocidad del cambio | Minutos, Pod por Pod | Milisegundos, un patch |
+| Rollback | Recrear los Pods viejos | Otro patch, instantáneo |
+| Recursos | N + maxSurge | 2N mientras dure |
+
+La ventaja concreta acá es el smoke test: `scripts/smoke-test.sh` prueba green por
+su Service privado y solo si pasa se mueve el tráfico. En un rolling update un Pod
+nuevo empieza a recibir usuarios apenas queda Ready.
+
+## Objetos de Kubernetes
+
+| Archivo | Qué define |
+|---|---|
+| `00-namespace.yaml` | Namespace `statuspage` |
+| `01-secret.yaml` | Contraseña de Postgres |
+| `02-configmap.yaml` | Lista de servicios a monitorear y timeout |
+| `03-postgres.yaml` | Deployment, PVC y Service de la base |
+| `04-deployment-blue.yaml` | Versión 1, etiqueta `version: blue` |
+| `05-deployment-green.yaml` | Versión 2, etiqueta `version: green` |
+| `06-services.yaml` | Service público, preview de green, interno de blue |
+| `07-cronjob.yaml` | Dispara los chequeos cada minuto |
+| `08-demo-services.yaml` | nginx y el servicio que falla a propósito |
+
+### Dos probes distintas y por qué
+
+- `/health` (**liveness**) responde 200 mientras el proceso viva, aunque la base
+  esté caída. Si devolviera error por falta de base, Kubernetes reiniciaría el Pod
+  en loop sin arreglar nada, porque el problema está afuera.
+- `/ready` (**readiness**) sí consulta la base. Sin base el Pod se saca del Service
+  hasta que vuelva, en vez de mandarle usuarios que van a ver un error.
+
+### El CronJob no tiene el código de chequeo
+
+Solo hace `POST /api/check-now` contra el Service público. Los chequeos los ejecuta
+siempre la versión que tiene el tráfico. Después del switch, la ronda siguiente
+empieza a guardar latencia sin haber tocado el CronJob.
+
+Si el CronJob trajera su propia copia del código habría que versionarlo y
+patchearlo en cada switch.
+
+## Scripts
+
+| Script | Qué hace |
+|---|---|
+| `deploy.sh` | Levanta todo desde cero |
+| `build-imagenes.sh` | Construye las tres imágenes dentro de minikube |
+| `smoke-test.sh` | Prueba green por su Service privado |
+| `switch.sh` | Smoke test y después mueve el selector del Service |
+| `rollback.sh` | Vuelve a la versión anterior |
+| `demo-blue-green.sh` | Switch con monitor de requests y resumen de errores |
+
+## Desarrollo sin Kubernetes
+
+```bash
+docker compose up --build
+```
+
+Levanta la aplicación con Postgres, nginx y el servicio caótico. Tablero en
+http://localhost:8080
+
+Para levantar la v1 en vez de la v2:
+
+```bash
+APP_DIR=app-v1 APP_VERSION=1.0 APP_COLOR=blue docker compose up --build
+```
+
+## Tests
+
+```bash
+pip install pytest httpx && pytest tests/
+```
+
+10 tests de la lógica de chequeo. No necesitan base ni cluster: levantan
+servidores HTTP reales en puertos libres.
+
+## Estructura
+
+```
+app/                  código de la v2
+app-v1/               código de la v1, congelado
+flaky/                servicio que falla el 20% de las veces
+Dockerfile            un solo Dockerfile para las dos versiones (ARG APP_DIR)
+docker-compose.yml    desarrollo local sin Kubernetes
+k8s/                  manifiestos
+scripts/              build, deploy, switch, rollback y demo
+tests/                tests del checker
+```
+
+## Demostración en vivo
+
+1. **El tablero andando.** Servicios en verde, el caótico alternando.
+2. **Resiliencia.** `kubectl delete pod -n statuspage -l app=nginx-demo`: el
+   semáforo se pone rojo, Kubernetes recrea el Pod, vuelve a verde solo.
+3. **El switch.** `./scripts/demo-blue-green.sh`: la cabecera cambia de azul a
+   verde, aparece la columna de latencia y el resumen dice 0 errores.
+4. **El rollback.** `./scripts/rollback.sh`: instantáneo, y la v1 sigue
+   funcionando sobre las filas que la v2 dejó con latencia.

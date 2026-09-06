@@ -38,24 +38,9 @@ def cursor():
 
 
 # --- Esquema -----------------------------------------------------------------
-# LA MIGRACION DE LA V2, QUE ES EL PUNTO MAS IMPORTANTE DE TODO EL PROYECTO
-#
-# Blue (v1) y green (v2) comparten ESTA MISMA base. La v2 necesita una columna
-# nueva, latency_ms, que la v1 no conoce. Si el cambio de esquema fuera
-# destructivo (renombrar una columna, cambiarle el tipo, agregarla como NOT NULL),
-# despues del switch la v1 dejaria de poder escribir y el rollback seria
-# imposible: quedarias obligado a seguir adelante con una version rota.
-#
-# Por eso la migracion es ADITIVA:
-#   - se AGREGA una columna, no se toca ninguna existente
-#   - la columna admite NULL, asi que los INSERT de la v1 (que no la mencionan)
-#     siguen siendo validos y dejan el valor vacio
-#   - las filas que ya escribio la v2 no le molestan a la v1: simplemente no las
-#     lee
-#
-# Es el patron que en la industria se llama expand/contract: primero se expande el
-# esquema de forma compatible, y recien cuando ya no queda ninguna version vieja
-# corriendo se limpia lo que sobra.
+# v1: la tabla checks NO tiene columna de latencia. La v2 la agrega con una
+# migracion aditiva, de modo que esta version pueda seguir escribiendo si hay
+# que volver atras (rollback del blue/green).
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS targets (
@@ -78,32 +63,16 @@ CREATE TABLE IF NOT EXISTS checks (
     ts          TIMESTAMPTZ NOT NULL DEFAULT now(),
     ok          BOOLEAN NOT NULL,
     status_code INTEGER,
-    error       TEXT,
-    -- Agregada por la v2. Va sin NOT NULL a proposito: es lo que permite que la
-    -- v1 siga insertando sin mencionarla.
-    latency_ms  REAL
+    error       TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_checks_target_ts ON checks (target_id, ts DESC);
 """
 
 
-# CREATE TABLE IF NOT EXISTS no sirve para agregar una columna a una tabla que ya
-# existe: si la base la creo la v1, la tabla esta pero sin latency_ms. Por eso la
-# migracion va aparte y se ejecuta siempre.
-#
-# ADD COLUMN IF NOT EXISTS la hace idempotente: se puede correr mil veces y en
-# varias replicas a la vez sin romper nada (la segunda espera el lock, ve que la
-# columna ya esta y no hace nada).
-MIGRACIONES = """
-ALTER TABLE checks ADD COLUMN IF NOT EXISTS latency_ms REAL;
-"""
-
-
 def init_schema() -> None:
     with cursor() as cur:
         cur.execute(SCHEMA)
-        cur.execute(MIGRACIONES)
 
 
 def seed_targets() -> int:
@@ -182,13 +151,12 @@ def delete_target(target_id: int) -> bool:
         return cur.rowcount > 0
 
 
-def record_check(target_id: int, ok: bool, status_code, error, latency_ms=None) -> None:
-    """Guarda un chequeo. latency_ms es el agregado de la v2."""
+def record_check(target_id: int, ok: bool, status_code, error) -> None:
     with cursor() as cur:
         cur.execute(
-            "INSERT INTO checks (target_id, ok, status_code, error, latency_ms) "
-            "VALUES (%s, %s, %s, %s, %s)",
-            (target_id, ok, status_code, error, latency_ms),
+            "INSERT INTO checks (target_id, ok, status_code, error) "
+            "VALUES (%s, %s, %s, %s)",
+            (target_id, ok, status_code, error),
         )
 
 
@@ -199,7 +167,7 @@ def status_summary() -> list[dict]:
             """
             WITH ultimo AS (
                 SELECT DISTINCT ON (target_id)
-                       target_id, ts, ok, status_code, error, latency_ms
+                       target_id, ts, ok, status_code, error
                 FROM checks
                 ORDER BY target_id, ts DESC
             ),
@@ -210,19 +178,13 @@ def status_summary() -> list[dict]:
                     count(*) FILTER (WHERE ts > now() - interval '24 hours')        AS n24h,
                     count(*) FILTER (WHERE ts > now() - interval '24 hours' AND ok) AS ok24h,
                     count(*) FILTER (WHERE ts > now() - interval '7 days')          AS n7d,
-                    count(*) FILTER (WHERE ts > now() - interval '7 days'  AND ok)  AS ok7d,
-                    -- Promedio de latencia de la ultima hora. avg() ignora los
-                    -- NULL solo: las filas que dejo la v1 no bajan el promedio,
-                    -- simplemente no cuentan.
-                    avg(latency_ms) FILTER (WHERE ts > now() - interval '1 hour')   AS lat1h
+                    count(*) FILTER (WHERE ts > now() - interval '7 days'  AND ok)  AS ok7d
                 FROM checks
                 GROUP BY target_id
             )
             SELECT t.id, t.name, t.kind, t.url, t.host, t.port, t.source, t.enabled,
                    u.ts AS last_ts, u.ok AS last_ok,
                    u.status_code AS last_status, u.error AS last_error,
-                   u.latency_ms AS last_latency,
-                   round(v.lat1h::numeric, 1) AS latencia_media_1h,
                    round(v.ok1h  * 100.0 / NULLIF(v.n1h , 0), 2) AS uptime_1h,
                    round(v.ok24h * 100.0 / NULLIF(v.n24h, 0), 2) AS uptime_24h,
                    round(v.ok7d  * 100.0 / NULLIF(v.n7d , 0), 2) AS uptime_7d
@@ -238,7 +200,7 @@ def status_summary() -> list[dict]:
 def history(target_id: int, limit: int = 60) -> list[dict]:
     with cursor() as cur:
         cur.execute(
-            "SELECT ts, ok, status_code, error, latency_ms FROM checks "
+            "SELECT ts, ok, status_code, error FROM checks "
             "WHERE target_id = %s ORDER BY ts DESC LIMIT %s",
             (target_id, limit),
         )

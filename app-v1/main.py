@@ -1,9 +1,7 @@
 """Status page: API HTTP y tablero.
 
-VERSION 2. Igual que la v1 pero ademas mide cuanto tarda cada servicio en
-responder y lo muestra en el tablero. El cambio de esquema que eso implica es
-aditivo, asi que la v1 puede seguir escribiendo en la misma base y el rollback
-sigue siendo posible (ver el comentario largo en db.py).
+VERSION 1. Registra si cada servicio respondio y con que codigo, y muestra el
+estado actual mas el porcentaje de disponibilidad por ventana de tiempo.
 
 Endpoints:
   GET    /                     tablero (HTML)
@@ -155,11 +153,7 @@ def chequear_ahora():
 
     for target, resultado in resultados:
         db.record_check(
-            target["id"],
-            resultado["ok"],
-            resultado["status_code"],
-            resultado["error"],
-            resultado.get("latency_ms"),
+            target["id"], resultado["ok"], resultado["status_code"], resultado["error"]
         )
 
     caidos = sum(1 for _, r in resultados if not r["ok"])
