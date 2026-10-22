@@ -1,0 +1,298 @@
+# Grafana: los graficos.
+#
+# Todo viene configurado desde ConfigMaps: la conexion a Prometheus y el tablero
+# con sus paneles. Grafana los lee al arrancar, asi que levanta con los graficos
+# ya puestos y nadie tiene que armar nada a mano. Eso es lo que hace que el
+# trabajo sea reproducible: si se borra el Pod y se vuelve a crear, aparece
+# igual que antes.
+#
+# El acceso anonimo esta activado con permiso de solo lectura, para que se pueda
+# mirar el tablero sin usuario ni contrasena. Para editar hay que entrar como
+# admin, y esa contrasena sale del Secret.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-credenciales
+  namespace: statuspage
+type: Opaque
+stringData:
+  usuario: admin
+  password: statuspage-demo
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: statuspage
+data:
+  datasource.yml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        editable: false
+
+  dashboards.yml: |
+    apiVersion: 1
+    providers:
+      - name: statuspage
+        type: file
+        disableDeletion: true
+        # Cada 30 segundos relee el archivo del tablero. Editar el ConfigMap y
+        # aplicar alcanza para que el cambio aparezca.
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-tablero
+  namespace: statuspage
+data:
+  statuspage.json: |
+    {
+      "uid": "statuspage",
+      "title": "Status Page",
+      "tags": ["devops"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "refresh": "10s",
+      "time": { "from": "now-30m", "to": "now" },
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Chequeos fallidos en los ultimos 2 minutos",
+          "description": "Es la metrica sobre la que corre la alerta. Cuando una linea pasa de 5, salta DemasiadosFallos.",
+          "gridPos": { "h": 9, "w": 16, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (servicio) (increase(statuspage_chequeos_total{resultado=\"fallo\"}[2m]))",
+              "legendFormat": "{{servicio}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "min": 0,
+              "custom": { "fillOpacity": 10, "lineWidth": 2 },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 5 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+        },
+        {
+          "type": "stat",
+          "title": "Servicios caidos ahora",
+          "gridPos": { "h": 9, "w": 8, "x": 16, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "refId": "A", "expr": "count(statuspage_servicio_arriba == 0) or vector(0)" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 1 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": { "colorMode": "background", "graphMode": "none" }
+        },
+        {
+          "type": "timeseries",
+          "title": "Estado de cada servicio",
+          "description": "1 arriba, 0 caido.",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "refId": "A", "expr": "statuspage_servicio_arriba", "legendFormat": "{{servicio}}" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "max": 1,
+              "custom": { "fillOpacity": 20, "lineWidth": 2, "drawStyle": "line", "lineInterpolation": "stepAfter" }
+            },
+            "overrides": []
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Latencia, percentil 95",
+          "description": "Solo la mide la version 2. En blue esta vacio, y eso mismo deja ver cuando se hizo el switch.",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.95, sum by (servicio, le) (rate(statuspage_latencia_segundos_bucket[5m])))",
+              "legendFormat": "{{servicio}}"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "s", "min": 0 }, "overrides": [] }
+        },
+        {
+          "type": "timeseries",
+          "title": "Que version esta atendiendo",
+          "description": "El salto de una linea a la otra es el momento exacto del switch blue/green.",
+          "gridPos": { "h": 7, "w": 12, "x": 0, "y": 17 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            { "refId": "A", "expr": "sum by (color) (statuspage_info)", "legendFormat": "{{color}}" }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "min": 0,
+              "custom": { "fillOpacity": 25, "lineWidth": 1, "drawStyle": "line", "lineInterpolation": "stepAfter" }
+            },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "blue" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }] },
+              { "matcher": { "id": "byName", "options": "green" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }
+            ]
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Alertas recibidas",
+          "gridPos": { "h": 7, "w": 12, "x": 12, "y": 17 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (alerta, estado) (increase(statuspage_alertas_recibidas_total[5m]))",
+              "legendFormat": "{{alerta}} ({{estado}})"
+            }
+          ],
+          "fieldConfig": { "defaults": { "min": 0, "custom": { "fillOpacity": 20 } }, "overrides": [] }
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: statuspage
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      securityContext:
+        runAsUser: 472
+        fsGroup: 472
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.5.1
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-credenciales
+                  key: usuario
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-credenciales
+                  key: password
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: Viewer
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            # Abre directo en el tablero del proyecto en vez de en la pantalla
+            # de bienvenida.
+            - name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
+              value: /var/lib/grafana/dashboards/statuspage.json
+          ports:
+            - containerPort: 3000
+              name: http
+          volumeMounts:
+            - name: provisioning-datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: provisioning-dashboards
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: tablero
+              mountPath: /var/lib/grafana/dashboards
+            - name: datos
+              mountPath: /var/lib/grafana/data
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 40
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: provisioning-datasources
+          configMap:
+            name: grafana-provisioning
+            items:
+              - key: datasource.yml
+                path: datasource.yml
+        - name: provisioning-dashboards
+          configMap:
+            name: grafana-provisioning
+            items:
+              - key: dashboards.yml
+                path: dashboards.yml
+        - name: tablero
+          configMap:
+            name: grafana-tablero
+        - name: datos
+          # Grafana guarda su base interna aca. Como el tablero y la conexion
+          # vienen de los ConfigMaps, no hay nada que preservar entre reinicios.
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: statuspage
+spec:
+  type: NodePort
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: http
+      nodePort: 30092

@@ -1,0 +1,99 @@
+# Configuracion de Prometheus y las reglas de alerta.
+#
+# ACA SE CAMBIAN LOS NUMEROS DE LA CONSIGNA
+# La alerta salta cuando hay mas de 5 chequeos fallidos en 2 minutos. Esos dos
+# valores estan en la expresion de la regla DemasiadosFallos, mas abajo. Para
+# cambiarlos se edita este archivo y se hace kubectl apply: no hay que
+# reconstruir ninguna imagen ni volver a desplegar la aplicacion.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: statuspage
+data:
+  prometheus.yml: |
+    global:
+      # Cada cuanto Prometheus va a buscar las metricas de cada Pod.
+      scrape_interval: 15s
+      # Cada cuanto evalua las reglas de alerta.
+      evaluation_interval: 15s
+
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: ['alertmanager:9093']
+
+    rule_files:
+      - /etc/prometheus/reglas/*.yml
+
+    scrape_configs:
+      # La aplicacion. No hay una lista fija de direcciones: Prometheus le
+      # pregunta a Kubernetes que Pods hay en el namespace y se queda con los
+      # que tengan la anotacion prometheus.io/scrape.
+      - job_name: statuspage
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [statuspage]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          # Se guarda de que color es cada Pod, para poder separar en Grafana
+          # que midio blue y que midio green.
+          - source_labels: [__meta_kubernetes_pod_label_version]
+            action: replace
+            target_label: color
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+
+      # Prometheus midiendose a si mismo.
+      - job_name: prometheus
+        static_configs:
+          - targets: ['localhost:9090']
+
+  reglas.yml: |
+    groups:
+      - name: statuspage
+        rules:
+          # LA ALERTA QUE PIDE LA CONSIGNA.
+          #
+          # increase() mide cuanto subio el contador en la ventana que se le
+          # pida. sum() junta lo que contaron las dos replicas, porque el
+          # CronJob le pega al Service y cae en cualquiera de las dos; sin el
+          # sum() cada una contaria por su lado y el umbral nunca se alcanzaria.
+          # by (servicio) hace que se cuente por servicio y no todo junto.
+          #
+          # X = 5 fallos        Y = 2 minutos
+          - alert: DemasiadosFallos
+            expr: sum by (servicio) (increase(statuspage_chequeos_total{resultado="fallo"}[2m])) > 5
+            # Tiene que cumplirse 30 segundos seguidos. Evita que un pico de un
+            # solo scrape dispare una alerta que al ratito se desarma sola.
+            for: 30s
+            labels:
+              severity: critica
+            annotations:
+              summary: "Demasiados fallos en {{ $labels.servicio }}"
+              description: "{{ $labels.servicio }} acumulo {{ $value | printf \"%.0f\" }} chequeos fallidos en los ultimos 2 minutos (el umbral es 5)."
+
+          # Segunda alerta, mas clasica: el servicio esta caido ahora mismo.
+          # No la pide la consigna, pero es la otra mitad de lo que hace un
+          # sistema de monitoreo y cuesta cinco lineas.
+          - alert: ServicioCaido
+            expr: statuspage_servicio_arriba == 0
+            for: 1m
+            labels:
+              severity: alta
+            annotations:
+              summary: "{{ $labels.servicio }} esta caido"
+              description: "{{ $labels.servicio }} lleva mas de 1 minuto sin responder."

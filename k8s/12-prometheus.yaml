@@ -1,0 +1,104 @@
+# Prometheus: guarda las metricas y evalua las reglas de alerta.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-datos
+  namespace: statuspage
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: statuspage
+  labels:
+    app: prometheus
+spec:
+  replicas: 1
+  # Recreate y no RollingUpdate: dos Prometheus escribiendo el mismo volumen lo
+  # corrompen. Mismo motivo que en Postgres.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      securityContext:
+        # La imagen oficial corre como el usuario 65534 (nobody) y necesita
+        # poder escribir el volumen.
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.1.0
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            # Cuanto historial guarda. Mas que suficiente para el trabajo y
+            # evita que el volumen crezca sin control.
+            - --storage.tsdb.retention.time=7d
+            # Permite recargar la configuracion con un POST a /-/reload, sin
+            # reiniciar el Pod ni perder los datos ya recolectados.
+            - --web.enable-lifecycle
+          ports:
+            - containerPort: 9090
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus/prometheus.yml
+              subPath: prometheus.yml
+            - name: config
+              mountPath: /etc/prometheus/reglas/reglas.yml
+              subPath: reglas.yml
+            - name: datos
+              mountPath: /prometheus
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: datos
+          persistentVolumeClaim:
+            claimName: prometheus-datos
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: statuspage
+spec:
+  type: NodePort
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: http
+      nodePort: 30091

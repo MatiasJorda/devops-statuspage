@@ -48,6 +48,13 @@ spec:
       version: green
   template:
     metadata:
+      annotations:
+        # Prometheus no tiene una lista fija de a quien consultar: recorre los
+        # Pods del namespace y se queda con los que tengan esta anotacion. Un
+        # Pod nuevo entra al monitoreo solo, sin tocar la configuracion.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
       labels:
         app: statuspage
         version: green

@@ -1,0 +1,108 @@
+# Alertmanager: recibe las alertas que dispara Prometheus y decide a donde van.
+#
+# Son dos trabajos distintos a proposito. Prometheus sabe cuando algo esta mal,
+# pero no sabe a quien avisar ni cuantas veces. Alertmanager agrupa alertas
+# parecidas para no mandar veinte avisos del mismo problema, las silencia
+# durante un mantenimiento y las reenvia si nadie las atiende.
+#
+# Aca el destino es la propia aplicacion: un webhook al endpoint /api/alertas,
+# que las guarda y las muestra en el tablero. En un entorno real seria un correo
+# o un canal de Slack, pero eso necesitaria credenciales y salida a internet, y
+# la idea es que el trabajo corra sin depender de nada de afuera.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: statuspage
+data:
+  alertmanager.yml: |
+    route:
+      receiver: statuspage
+      # Espera 10 segundos antes del primer aviso, por si estan por llegar mas
+      # alertas del mismo grupo y conviene mandarlas juntas.
+      group_wait: 10s
+      group_interval: 30s
+      # Cada cuanto repite el aviso de una alerta que sigue activa.
+      repeat_interval: 5m
+      group_by: ['alertname', 'servicio']
+
+    receivers:
+      - name: statuspage
+        webhook_configs:
+          # El Service publico de la aplicacion. Como apunta al color activo,
+          # la alerta siempre la recibe la version que esta atendiendo.
+          - url: http://statuspage/api/alertas
+            # Avisa tambien cuando la alerta se resuelve, no solo cuando salta.
+            send_resolved: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: statuspage
+  labels:
+    app: alertmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      securityContext:
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.28.0
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+          ports:
+            - containerPort: 9093
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+            - name: datos
+              mountPath: /alertmanager
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+        - name: datos
+          # Lo unico que guarda son los silencios y el estado de las alertas en
+          # vuelo. Si se reinicia, Prometheus le vuelve a mandar lo que siga
+          # activo, asi que no hace falta un volumen persistente.
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: statuspage
+spec:
+  type: NodePort
+  selector:
+    app: alertmanager
+  ports:
+    - port: 9093
+      targetPort: http
+      nodePort: 30093

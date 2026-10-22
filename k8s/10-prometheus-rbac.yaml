@@ -1,0 +1,38 @@
+# Permisos para que Prometheus pueda mirar el cluster.
+#
+# Prometheus arma su lista de objetivos preguntandole a Kubernetes que Pods hay.
+# Para eso necesita permiso de lectura, y los permisos en Kubernetes se arman
+# siempre en tres partes: una identidad (ServiceAccount), una lista de lo que se
+# puede hacer (ClusterRole) y la union de las dos (ClusterRoleBinding).
+#
+# El ClusterRole solo da lectura. Prometheus nunca necesita crear ni borrar
+# nada, y darle mas permiso de los que usa es como dejar la llave de toda la
+# casa al que solo viene a leer el medidor.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: statuspage
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-statuspage
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints", "nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-statuspage
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus-statuspage
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: statuspage
