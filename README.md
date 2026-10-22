@@ -254,6 +254,11 @@ minikube stop
   contraseña de juguete que no protege nada. En un proyecto real se usa Sealed
   Secrets, External Secrets o Vault.
 - **El switch no queda registrado en el repositorio** (ver arriba).
+- **`ServicioCaido` dispara seguido**, porque el servicio caótico falla a
+  propósito y a veces encadena dos chequeos fallidos. En un sistema real una
+  alerta que salta todo el tiempo deja de leerse, y se arreglaría subiendo el
+  `for` o dejando ese servicio fuera de esa regla. Acá conviene que salte,
+  porque es lo que permite mostrarla funcionando.
 
 ## Monitoreo y alertas
 
