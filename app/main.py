@@ -16,6 +16,9 @@ Endpoints:
   GET    /api/history/{id}     ultimos chequeos de un servicio
   POST   /api/check-now        dispara una ronda de chequeos ya mismo
   GET    /health               liveness probe: "¿el proceso esta vivo?"
+  GET    /metrics              lo que lee Prometheus
+  POST   /api/alertas          webhook de Alertmanager
+  GET    /api/alertas          alertas activas y recientes
   GET    /ready                readiness probe: "¿puedo atender pedidos?"
 
 POR QUE HAY DOS ENDPOINTS DE SALUD Y NO UNO
@@ -32,11 +35,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
-from . import checker, config, db
+from . import checker, config, db, metricas
 
 log = logging.getLogger("statuspage")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -189,9 +193,80 @@ def chequear_ahora():
             resultado.get("latency_ms"),
         )
 
+    # Si registrar las metricas falla, se pierde un dato de monitoreo, no la
+    # ronda de chequeos. Lo contrario seria que el sistema de observabilidad
+    # tumbe justamente lo que tiene que observar.
+    try:
+        metricas.registrar_ronda(resultados)
+    except Exception:  # noqa: BLE001
+        log.exception("no se pudieron registrar las metricas de la ronda")
+
     caidos = sum(1 for _, r in resultados if not r["ok"])
     log.info("ronda de chequeos: %s servicios, %s caidos", len(resultados), caidos)
     return {"chequeados": len(resultados), "caidos": caidos}
+
+
+# --- Metricas y alertas ------------------------------------------------------
+
+@app.get("/metrics", include_in_schema=False)
+def exponer_metricas():
+    """Lo que lee Prometheus cada 15 segundos.
+
+    Devuelve texto plano, no JSON. El formato es el que espera Prometheus y lo
+    arma la libreria; el Content-Type importa, sin el no lo parsea.
+    """
+    return Response(generate_latest(metricas.REGISTRO), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.post("/api/alertas", status_code=202)
+def recibir_alerta(aviso: dict = Body(...)):
+    """Webhook de Alertmanager.
+
+    Alertmanager manda un lote con una o varias alertas, cada una con sus
+    etiquetas y anotaciones. Se guardan todas y se muestran en el tablero, que
+    es lo que cierra el circuito: la alerta no queda en un panel aparte, aparece
+    donde el equipo ya esta mirando.
+
+    Devuelve 202 y nunca un error: si este endpoint fallara, Alertmanager
+    reintentaria en loop y el problema de monitoreo se volveria un segundo
+    problema.
+    """
+    guardadas = 0
+
+    for alerta in aviso.get("alerts", []):
+        etiquetas = alerta.get("labels", {})
+        anotaciones = alerta.get("annotations", {})
+        try:
+            db.registrar_alerta(
+                {
+                    "fingerprint": alerta.get("fingerprint", ""),
+                    "nombre": etiquetas.get("alertname", "sin nombre"),
+                    "estado": alerta.get("status", "firing"),
+                    "severidad": etiquetas.get("severity"),
+                    "servicio": etiquetas.get("servicio"),
+                    "resumen": anotaciones.get("summary"),
+                    "descripcion": anotaciones.get("description"),
+                    "arranco": alerta.get("startsAt"),
+                }
+            )
+            metricas.ALERTAS.labels(
+                alerta=etiquetas.get("alertname", "sin nombre"),
+                estado=alerta.get("status", "firing"),
+            ).inc()
+            guardadas += 1
+        except Exception:  # noqa: BLE001
+            log.exception("no se pudo guardar una alerta")
+
+    log.info("alertas recibidas: %s", guardadas)
+    return {"recibidas": guardadas}
+
+
+@app.get("/api/alertas")
+def listar_alertas(limit: int = 20):
+    return {
+        "activas": db.alertas_activas(),
+        "recientes": db.alertas_recientes(min(limit, 100)),
+    }
 
 
 # --- Probes ------------------------------------------------------------------

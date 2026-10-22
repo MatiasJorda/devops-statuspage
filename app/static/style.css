@@ -76,6 +76,44 @@ main { max-width: 1000px; margin: 0 auto; padding: 1.5rem; }
 .aviso { color: var(--ok); font-size: 0.8rem; }
 .error { color: var(--caido); font-size: 0.8rem; }
 
+/* --- Alertas que llegan desde Alertmanager --- */
+.alerta {
+  background: #2a1114;
+  border: 1px solid var(--caido);
+  border-left-width: 3px;
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.6rem;
+}
+
+.alerta-titulo {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--caido);
+  margin-bottom: 0.3rem;
+}
+
+.alerta-etiqueta {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--caido);
+  border-radius: 3px;
+  padding: 0.1rem 0.35rem;
+}
+
+.alerta-detalle { font-size: 0.85rem; color: var(--texto); }
+
+.alerta-hora {
+  font-size: 0.72rem;
+  color: var(--texto-tenue);
+  margin-top: 0.3rem;
+  font-variant-numeric: tabular-nums;
+}
+
 /* --- Tarjetas de servicio --- */
 .grilla { display: grid; gap: 0.75rem; }
 

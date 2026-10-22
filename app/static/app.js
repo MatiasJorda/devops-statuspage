@@ -209,7 +209,40 @@ $("#form-alta").onsubmit = async (e) => {
 
 $("#btn-chequear").onclick = chequearAhora;
 
+// Las alertas las manda Alertmanager por webhook y la aplicacion las guarda.
+// Se muestran arriba de todo para que no haya que mirar otro panel.
+async function cargarAlertas() {
+  let activas = [];
+  try {
+    const r = await fetch("/api/alertas");
+    activas = (await r.json()).activas || [];
+  } catch {
+    return;
+  }
+
+  if (!activas.length) {
+    $("#alertas").innerHTML = "";
+    return;
+  }
+
+  $("#alertas").innerHTML = activas
+    .map(
+      (a) => `
+    <div class="alerta">
+      <div class="alerta-titulo">
+        <span class="alerta-etiqueta">${escapar(a.severidad || "alerta")}</span>
+        ${escapar(a.nombre)}
+      </div>
+      <div class="alerta-detalle">${escapar(a.descripcion || a.resumen || "")}</div>
+      <div class="alerta-hora">desde ${new Date(a.arranco).toLocaleTimeString("es-AR")}</div>
+    </div>`
+    )
+    .join("");
+}
+
 cargarVersion();
 cargarEstado();
+cargarAlertas();
+setInterval(cargarAlertas, REFRESCO_MS);
 setInterval(cargarEstado, REFRESCO_MS);
 setInterval(cargarVersion, REFRESCO_MS);   // detecta el switch blue/green

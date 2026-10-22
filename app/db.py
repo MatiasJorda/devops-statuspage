@@ -96,6 +96,24 @@ CREATE TABLE IF NOT EXISTS checks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_checks_target_ts ON checks (target_id, ts DESC);
+
+-- Alertas que manda Alertmanager por webhook. Se guarda un evento por aviso,
+-- no un estado por alerta: asi queda el historial de cuando se disparo y
+-- cuando se resolvio cada una, que es lo que se muestra en el tablero.
+CREATE TABLE IF NOT EXISTS alertas (
+    id          BIGSERIAL PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    nombre      TEXT NOT NULL,
+    estado      TEXT NOT NULL,
+    severidad   TEXT,
+    servicio    TEXT,
+    resumen     TEXT,
+    descripcion TEXT,
+    arranco     TIMESTAMPTZ,
+    recibida    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_alertas_recibida ON alertas (recibida DESC);
 """
 
 
@@ -282,3 +300,50 @@ def ping() -> bool:
             return True
     except psycopg.Error:
         return False
+
+
+# --- Alertas -----------------------------------------------------------------
+
+def registrar_alerta(a: dict) -> None:
+    """Guarda un aviso de Alertmanager."""
+    with cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO alertas (fingerprint, nombre, estado, severidad,
+                                 servicio, resumen, descripcion, arranco)
+            VALUES (%(fingerprint)s, %(nombre)s, %(estado)s, %(severidad)s,
+                    %(servicio)s, %(resumen)s, %(descripcion)s, %(arranco)s)
+            """,
+            a,
+        )
+
+
+def alertas_recientes(limit: int = 20) -> list[dict]:
+    """Ultimos avisos recibidos, el mas nuevo primero."""
+    with cursor() as cur:
+        cur.execute(
+            "SELECT nombre, estado, severidad, servicio, resumen, descripcion, "
+            "arranco, recibida FROM alertas ORDER BY recibida DESC LIMIT %s",
+            (limit,),
+        )
+        return cur.fetchall()
+
+
+def alertas_activas() -> list[dict]:
+    """Alertas que ahora mismo estan disparadas.
+
+    Una alerta puede dispararse y resolverse varias veces, asi que se mira el
+    ultimo evento de cada fingerprint y se devuelven solo las que quedaron en
+    firing.
+    """
+    with cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT ON (fingerprint)
+                   nombre, estado, severidad, servicio, resumen, descripcion,
+                   arranco, recibida
+            FROM alertas
+            ORDER BY fingerprint, recibida DESC
+            """
+        )
+        return [a for a in cur.fetchall() if a["estado"] == "firing"]
