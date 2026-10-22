@@ -3,8 +3,12 @@
 Tablero que monitorea servicios y muestra si están arriba o caídos, con historial
 de disponibilidad y tiempos de respuesta.
 
-Proyecto de la materia DevOps: aplicación contenerizada, desplegada en Kubernetes,
-con dos versiones que se alternan usando la estrategia **blue/green**.
+Proyecto de la materia DevOps, en dos entregas:
+
+- **Entregable 1.** Aplicación contenerizada y desplegada en Kubernetes, con dos
+  versiones que se alternan usando la estrategia **blue/green**.
+- **Entregable 2.** Monitoreo con Prometheus y Grafana, y una alerta que salta
+  cuando se pasan X operaciones en una ventana de Y minutos.
 
 ## Qué hace
 
@@ -16,6 +20,7 @@ qué código y cuánto tardó. Con eso el tablero muestra:
 - Barra de historial con los últimos 40 chequeos
 - Latencia promedio (solo en la v2)
 - Alta, baja, pausa y reanudación de servicios desde la interfaz
+- Las alertas que dispara Prometheus, arriba de todo
 
 Los servicios monitoreados son los que corren en el propio cluster. Eso hace que
 el tablero sirva como instrumento de medición del proyecto: durante el switch
@@ -49,6 +54,16 @@ blue/green se ve en vivo que el servicio no se cae.
 
        Servicios monitoreados: nginx-demo, servicio-caotico, postgres,
                                statuspage-blue, statuspage-green
+
+  ── monitoreo (entregable 2) ──────────────────────────────────────────
+
+       Prometheus ──lee /metrics de cada Pod cada 15s
+            │       y evalúa la regla del umbral
+            ▼
+       Alertmanager ──webhook──► POST /api/alertas ──► la alerta aparece
+            │                                          arriba del tablero
+            ▼
+       Grafana ──consulta a Prometheus y dibuja los paneles
 ```
 
 ## Requisitos
@@ -101,6 +116,15 @@ Para ver solo la URL del túnel, sin abrir el navegador:
 ```bash
 minikube service statuspage -n statuspage --url
 ```
+
+Los cuatro servicios que se pueden abrir, cada uno en su NodePort:
+
+| Servicio | Puerto | Qué es |
+|---|---|---|
+| `statuspage` | 30090 | El tablero |
+| `prometheus` | 30091 | Métricas y estado de las reglas |
+| `grafana` | 30092 | Los gráficos |
+| `alertmanager` | 30093 | Alertas entregadas |
 
 ## Probar el blue/green
 
@@ -231,6 +255,117 @@ minikube stop
   Secrets, External Secrets o Vault.
 - **El switch no queda registrado en el repositorio** (ver arriba).
 
+## Monitoreo y alertas
+
+La aplicación cuenta lo que va pasando, Prometheus se lleva esos números cada 15
+segundos, y cuando superan un umbral dispara una alerta que termina apareciendo
+en el mismo tablero.
+
+```
+ aplicación ──► Prometheus ──► Alertmanager ──► webhook ──► tablero
+   /metrics       guarda y        agrupa y      POST a      la alerta
+                  evalúa la       entrega     /api/alertas  aparece arriba
+                  regla
+```
+
+### La alerta que pide la consigna
+
+```
+sum by (servicio) (increase(statuspage_chequeos_total{resultado="fallo"}[2m])) > 5
+```
+
+En palabras: si un servicio acumula **más de 5 chequeos fallidos en 2 minutos**,
+salta la alerta. Esos son la X y la Y del enunciado.
+
+Para cambiar los números se edita `k8s/11-prometheus-config.yaml` y se aplica.
+No hay que reconstruir ninguna imagen ni volver a desplegar la aplicación.
+
+Tres detalles de esa expresión, porque los tres hacen falta:
+
+- `increase(...[2m])` mide cuánto subió el contador en los últimos 2 minutos. Un
+  contador solo sube, así que el valor absoluto no dice nada; lo que importa es
+  cuánto creció en la ventana.
+- `sum` junta lo que contaron las dos réplicas. El CronJob le pega al Service y
+  cae en cualquiera de las dos, así que sin el `sum` cada una contaría por su
+  lado y el umbral no se alcanzaría nunca.
+- `by (servicio)` cuenta por servicio y no todo junto. Si no, cinco servicios
+  fallando una vez cada uno dispararían la misma alerta que uno fallando cinco.
+
+Hay una segunda alerta, `ServicioCaido`, que salta cuando un servicio lleva más
+de un minuto sin responder. No la pide el enunciado, pero es la otra mitad de lo
+que hace un sistema de monitoreo y son cinco líneas.
+
+### Qué mide la aplicación
+
+| Métrica | Tipo | Para qué |
+|---|---|---|
+| `statuspage_chequeos_total` | Counter | Chequeos por servicio y resultado. **Sobre esta corre la alerta** |
+| `statuspage_servicio_arriba` | Gauge | 1 si el último chequeo salió bien, 0 si falló |
+| `statuspage_latencia_segundos` | Histogram | Tiempo de respuesta. Solo la mide la v2 |
+| `statuspage_rondas_total` | Counter | Rondas de chequeo completadas |
+| `statuspage_info` | Gauge | Qué versión y color están atendiendo |
+| `statuspage_alertas_recibidas_total` | Counter | Alertas que llegaron de Alertmanager |
+
+Un Counter solo sube y sirve para preguntar cuánto creció entre dos momentos. Un
+Gauge sube y baja y sirve para el estado de ahora mismo.
+
+### Cómo encuentra Prometheus a la aplicación
+
+No tiene una lista fija de direcciones. Le pregunta a Kubernetes qué Pods hay en
+el namespace y se queda con los que tengan esta anotación:
+
+```yaml
+prometheus.io/scrape: "true"
+prometheus.io/port: "8080"
+prometheus.io/path: "/metrics"
+```
+
+Un Pod nuevo entra al monitoreo solo. Para eso Prometheus necesita permiso de
+lectura sobre el cluster, que se le da en `k8s/10-prometheus-rbac.yaml` con una
+identidad propia y permisos de solo lectura.
+
+### Dónde terminan las alertas
+
+Alertmanager las manda por webhook a `/api/alertas` de la propia aplicación, que
+las guarda y las muestra arriba del tablero. En un entorno real el destino sería
+un correo o un canal de Slack, pero eso necesitaría credenciales y salida a
+internet, y la idea es que el trabajo corra sin depender de nada de afuera.
+
+Que la alerta aparezca en el tablero y no en un panel aparte es a propósito: el
+equipo ya está mirando ahí.
+
+### Probar que funciona
+
+```bash
+./scripts/demo-alerta.sh
+```
+
+Rompe el servicio caótico a propósito, fuerza ocho rondas de chequeo, y espera a
+que la alerta recorra el camino completo hasta el tablero. Tarda entre uno y dos
+minutos: Prometheus consulta cada 15 segundos, la regla pide 30 segundos
+sostenidos y Alertmanager agrupa 10 segundos antes de entregar.
+
+Al terminar deja el servicio caótico como estaba, y la alerta se resuelve sola.
+
+### Los tableros
+
+```bash
+minikube service grafana      -n statuspage   # los gráficos
+minikube service prometheus   -n statuspage   # métricas y estado de las reglas
+minikube service alertmanager -n statuspage   # alertas entregadas
+```
+
+Grafana abre directo en el tablero del proyecto, sin pedir usuario. El datasource
+y los paneles vienen provisionados desde ConfigMaps, así que si se borra el Pod y
+se vuelve a crear aparece igual que antes.
+
+El panel de latencia está vacío mientras atiende blue, porque la v1 no la mide.
+Al hacer el switch a green se empieza a llenar, y ese contraste muestra el
+momento exacto del cambio.
+
+Para editar en Grafana hace falta entrar como `admin`, con la contraseña que está
+en el Secret `grafana-credenciales`.
+
 ## Objetos de Kubernetes
 
 | Archivo | Qué define |
@@ -244,6 +379,11 @@ minikube stop
 | `06-services.yaml` | Service público, preview de green, interno de blue |
 | `07-cronjob.yaml` | Dispara los chequeos cada minuto |
 | `08-demo-services.yaml` | nginx y el servicio que falla a propósito |
+| `10-prometheus-rbac.yaml` | Identidad y permisos de lectura para Prometheus |
+| `11-prometheus-config.yaml` | Configuración y **las reglas de alerta** |
+| `12-prometheus.yaml` | Prometheus con su volumen |
+| `13-alertmanager.yaml` | Alertmanager y el webhook al tablero |
+| `14-grafana.yaml` | Grafana con el datasource y el tablero provisionados |
 
 ### Dos probes distintas y por qué
 
@@ -272,6 +412,7 @@ patchearlo en cada switch.
 | `switch.sh` | Smoke test y después mueve el selector del Service |
 | `rollback.sh` | Vuelve a la versión anterior |
 | `demo-blue-green.sh` | Switch con monitor de requests y resumen de errores |
+| `demo-alerta.sh` | Provoca la alerta y la sigue hasta el tablero |
 
 ## Desarrollo sin Kubernetes
 
@@ -295,12 +436,13 @@ pip install -r requirements-dev.txt
 pytest tests/
 ```
 
-34 tests en tres archivos:
+44 tests en cuatro archivos:
 
 | Archivo | Qué prueba | Necesita |
 |---|---|---|
 | `test_checker.py` | La lógica de chequeo HTTP y TCP | Nada. Levanta servidores reales en puertos libres |
 | `test_api.py` | Los códigos HTTP de la API | Nada. Reemplaza la base por funciones falsas |
+| `test_metricas.py` | Las métricas y el webhook de alertas | Nada |
 | `test_db_integracion.py` | El SQL del cálculo de disponibilidad | Postgres |
 
 Los de integración **se saltean solos** si no hay base a mano, así que
@@ -327,9 +469,10 @@ dev/targets.json        servicios a monitorear en desarrollo local
 Dockerfile              un solo Dockerfile para las dos versiones (ARG APP_DIR)
 docker-compose.yml      desarrollo local sin Kubernetes
 requirements-dev.txt    dependencias de los tests
+pytest.ini              fija el path para que los tests importen el app/ correcto
 k8s/                    manifiestos
 scripts/                build, deploy, switch, rollback y demo
-tests/                  chequeo, API e integración con la base
+tests/                  chequeo, API, métricas e integración con la base
 ```
 
 ## Demostración en vivo
@@ -341,3 +484,6 @@ tests/                  chequeo, API e integración con la base
    verde, aparece la columna de latencia y el resumen dice 0 errores.
 4. **El rollback.** `./scripts/rollback.sh`: instantáneo, y la v1 sigue
    funcionando sobre las filas que la v2 dejó con latencia.
+5. **La alerta.** `./scripts/demo-alerta.sh`: el servicio caótico empieza a
+   fallar siempre, el gráfico de Grafana sube hasta pasar la línea de 5, y la
+   alerta aparece arriba del tablero. Al restaurarlo, se resuelve sola.

@@ -164,8 +164,8 @@ def test_check_now_guarda_un_resultado_por_servicio(cliente, monkeypatch):
     monkeypatch.setattr(
         db, "list_targets",
         lambda only_enabled=False: [
-            {"id": 1, "kind": "http", "url": "http://a/"},
-            {"id": 2, "kind": "http", "url": "http://b/"},
+            {"id": 1, "name": "a", "kind": "http", "url": "http://a/"},
+            {"id": 2, "name": "b", "kind": "http", "url": "http://b/"},
         ],
     )
     monkeypatch.setattr(

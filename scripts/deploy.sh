@@ -47,6 +47,10 @@ kubectl -n "$NS" rollout status deploy/servicio-caotico --timeout=120s
 echo "--> Aplicacion (blue y green en paralelo)"
 kubectl -n "$NS" rollout status deploy/statuspage-blue --timeout=180s
 kubectl -n "$NS" rollout status deploy/statuspage-green --timeout=180s
+echo "--> Monitoreo"
+kubectl -n "$NS" rollout status deploy/prometheus --timeout=240s
+kubectl -n "$NS" rollout status deploy/alertmanager --timeout=180s
+kubectl -n "$NS" rollout status deploy/grafana --timeout=240s
 echo
 
 echo "### 4/4  Primera ronda de chequeos"
@@ -82,11 +86,14 @@ kubectl -n "$NS" get deploy,svc,cronjob
 echo
 echo "Trafico actual: $(kubectl -n "$NS" get svc statuspage -o jsonpath='{.spec.selector.version}')"
 echo
-echo "Para abrir el tablero en el navegador:"
-echo "    minikube service statuspage -n $NS"
+echo "Para abrir cada cosa en el navegador:"
+echo "    minikube service statuspage   -n $NS    # el tablero"
+echo "    minikube service grafana      -n $NS    # los graficos"
+echo "    minikube service prometheus   -n $NS    # metricas y alertas"
+echo "    minikube service alertmanager -n $NS    # alertas entregadas"
 echo
 # Con el driver docker en macOS, la IP del nodo (192.168.49.2) NO es alcanzable
 # desde el host: hace falta el tunel que abre "minikube service", y ese comando
 # tiene que quedar corriendo en su propia terminal.
-echo "Siguiente paso: ./scripts/demo-blue-green.sh"
+echo "Siguiente paso: ./scripts/demo-blue-green.sh  o  ./scripts/demo-alerta.sh"
 echo "=========================================="
